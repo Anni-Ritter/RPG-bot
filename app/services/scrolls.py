@@ -12,6 +12,28 @@ DUPLICATE_DUST = {
     "legendary": 150,
 }
 
+SCROLL_TARGET_LABELS = {
+    "outfit": "Селин",
+    "accessory": "Селин",
+    "tori": "Тори",
+    "background": "Фон",
+}
+
+SCROLL_TYPE_LABELS = {
+    "outfit": "Полный образ",
+    "accessory": "Аксессуар",
+    "tori": "Образ фамильяра",
+    "background": "Фон / сцена",
+}
+
+
+def get_scroll_target(scroll) -> str:
+    return SCROLL_TARGET_LABELS.get(scroll.item_type, "Неизвестно")
+
+
+def get_scroll_type_label(scroll) -> str:
+    return SCROLL_TYPE_LABELS.get(scroll.item_type, scroll.item_type)
+
 
 async def grant_scroll(
     session: AsyncSession,

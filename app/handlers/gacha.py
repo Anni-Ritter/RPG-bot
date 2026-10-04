@@ -16,7 +16,7 @@ from app.services.assets import send_reaction
 from app.services.gacha import open_trial_chest
 from app.services.phrases import CHEST_RARITY_REACTIONS, pick
 from app.services.rewards import get_or_create_profile
-from app.services.scrolls import grant_scroll
+from app.services.scrolls import get_scroll_target, get_scroll_type_label, grant_scroll
 
 router = Router()
 TZ = ZoneInfo(settings.timezone)
@@ -48,7 +48,9 @@ async def _send_scroll_card(callback: CallbackQuery, user_id: int, inv: ScrollIn
     status_names = {"sealed": "запечатан", "revealed": "раскрыт", "generated": "сгенерирован"}
     favorite = " · 💜" if inv.is_favorite else ""
     text = (
-        f"{scroll.name}\n{scroll.rarity.upper()} · {status_names.get(inv.status, inv.status)}{favorite}\n"
+        f"{scroll.name}\n"
+        f"{scroll.rarity.title()} · {get_scroll_target(scroll)} · "
+        f"{status_names.get(inv.status, inv.status)}{favorite}\n"
         f"Коллекция: {scroll.collection}"
     )
 
@@ -88,6 +90,8 @@ async def chest_open(callback: CallbackQuery) -> None:
         detail = (
             f"Получено: {rarity.upper()}\n"
             f"Запечатанный свиток «{scroll.name}»\n"
+            f"Для: {get_scroll_target(scroll)}\n"
+            f"Тип: {get_scroll_type_label(scroll)}\n"
             f"Тема: {' / '.join(scroll.tags[:3])}"
         )
         emotion = "surprised" if rarity in {"epic", "legendary"} else "treasure"
@@ -144,7 +148,15 @@ async def reveal_scroll(callback: CallbackQuery) -> None:
             inv.status = "revealed"
             inv.revealed_at = datetime.now(TZ)
         await session.commit()
-    await send_reaction(callback.message, "selin", "curious", f"🔓 «{scroll.name}» раскрыт.\n\n{scroll.prompt}")
+    target = get_scroll_target(scroll)
+    await send_reaction(
+        callback.message,
+        "selin",
+        "curious",
+        f"🔓 «{scroll.name}» раскрыт.\n\n"
+        f"🎨 Промпт для генерации: {target}\n\n"
+        f"{scroll.prompt}",
+    )
     await callback.answer()
 
 
@@ -161,7 +173,11 @@ async def show_scroll(callback: CallbackQuery) -> None:
             await callback.answer("Сначала раскрой свиток.", show_alert=True)
             return
         await session.commit()
-    await callback.message.answer(scroll.prompt)
+    target = get_scroll_target(scroll)
+    await callback.message.answer(
+        f"🎨 Промпт для генерации: {target}\n\n"
+        f"{scroll.prompt}"
+    )
     await callback.answer()
 
 
@@ -201,8 +217,10 @@ async def add_scroll_image(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.set_state(ScrollImageState.waiting_photo)
     await state.update_data(scroll_id=scroll_id)
+    target = get_scroll_target(scroll)
     await callback.message.answer(
-        f"Пришли картинку для «{scroll.name}». Можно загружать несколько вариантов — потом выберешь основной."
+        f"🖼 Отправь результат генерации для: {target}\n"
+        f"Свиток: «{scroll.name}»"
     )
     await callback.answer()
 
