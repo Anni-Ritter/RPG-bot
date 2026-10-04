@@ -5,7 +5,7 @@ import json
 import random
 from pathlib import Path
 
-DIALOGUE_PATH = Path(__file__).resolve().parent.parent / "data" / "dialogue.json"
+DIALOGUE_PATH = Path(__file__).resolve().parent.parent / "game_data" / "dialogue.json"
 _DATA = json.loads(DIALOGUE_PATH.read_text(encoding="utf-8"))
 
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import StoryProgress
 
-STORY_PATH = Path(__file__).resolve().parent.parent / "data" / "story_days.json"
+STORY_PATH = Path(__file__).resolve().parent.parent / "game_data" / "story_days.json"
 _STORY = {row["day"]: row for row in json.loads(STORY_PATH.read_text(encoding="utf-8"))}
 
 

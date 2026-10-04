@@ -7,7 +7,7 @@ from app.models import ScrollDefinition
 
 
 async def seed_scrolls(session: AsyncSession) -> None:
-    path = Path(__file__).resolve().parent.parent / "data" / "scrolls.json"
+    path = Path(__file__).resolve().parent.parent / "game_data" / "scrolls.json"
     data = json.loads(path.read_text(encoding="utf-8"))
 
     for row in data:
