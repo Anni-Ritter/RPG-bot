@@ -1,0 +1,21 @@
+{
+  "backgrounds": {
+    "atelier_default": "backgrounds/atelier_main.png",
+    "atelier_wardrobe": "backgrounds/atelier_wardrobe.png",
+    "archive": "backgrounds/archive.png",
+    "training": "backgrounds/training_hall.png",
+    "promenade": "backgrounds/walk_evening.png",
+    "study": "backgrounds/work_study.png",
+    "food_nook": "backgrounds/food_nook.png",
+    "rest": "backgrounds/rest_room.png",
+    "seal": "backgrounds/seal_chamber.png",
+    "story_ruins": "backgrounds/story_ruins.png",
+    "story_forest": "backgrounds/story_forest.png",
+    "story_devourer": "backgrounds/story_devourer.png",
+    "story_tarren": "backgrounds/story_tarren.png",
+    "story_spire_road": "backgrounds/story_spire_road.png",
+    "story_spire_gate": "backgrounds/story_spire_gate.png"
+  },
+  "tori": ["neutral", "curious", "confused", "happy", "sleepy", "judging", "surprised", "treasure", "at_door", "scared", "sad", "angry", "affectionate", "proud"],
+  "selin": ["neutral", "happy", "curious", "sleepy", "surprised", "judging", "beckoning", "scared", "triumphant", "smirk", "soft_smile"]
+}

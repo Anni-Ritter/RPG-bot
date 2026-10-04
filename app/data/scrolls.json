@@ -1,0 +1,503 @@
+[
+  {
+    "id": "s01",
+    "name": "Прах молельни",
+    "rarity": "common",
+    "item_type": "background",
+    "collection": "Пробуждение в пыли",
+    "chapter": 1,
+    "tags": [
+      "temple",
+      "dust",
+      "light"
+    ],
+    "prompt": "ruined white stone shrine, drifting dust, broken arches, narrow beams of warm light, faded gold ornament, quiet sacred atmosphere",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s02",
+    "name": "Потрескавшийся венец",
+    "rarity": "common",
+    "item_type": "accessory",
+    "collection": "Пробуждение в пыли",
+    "chapter": 1,
+    "tags": [
+      "relic",
+      "circlet"
+    ],
+    "prompt": "thin cracked gold circlet, pale stone fragments, delicate chain details, small ivory gemstones, ancient relic style, minimal elegant ornament",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s03",
+    "name": "Сон в алебастре",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Пробуждение в пыли",
+    "chapter": 1,
+    "tags": [
+      "white",
+      "sheer",
+      "shrine"
+    ],
+    "prompt": "soft ivory layered dress, sheer white sleeves, off shoulder neckline, pale gold trim, translucent skirt panels, delicate waist ribbons, alabaster gemstone, ruined shrine ornament",
+    "source": "story",
+    "is_secret": false
+  },
+  {
+    "id": "s04",
+    "name": "Золото из трещин",
+    "rarity": "rare",
+    "item_type": "accessory",
+    "collection": "Руинная реликвия",
+    "chapter": 1,
+    "tags": [
+      "gold",
+      "cracks",
+      "relic"
+    ],
+    "prompt": "delicate gold body chains, thin cracked metal ornament, ivory gemstone clasps, small relic charms, asymmetric waist jewelry, refined ancient style",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s05",
+    "name": "Реликт под плитами",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Руинная реликвия",
+    "chapter": 1,
+    "tags": [
+      "ruins",
+      "sacred",
+      "elegant"
+    ],
+    "prompt": "layered cream ceremonial dress, broken gold filigree, long sheer cape sleeves, fitted waist, pale stone gemstones, relic belt, sacred ruin ornament",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s06",
+    "name": "Малый хранитель руин",
+    "rarity": "common",
+    "item_type": "tori",
+    "collection": "Руинная реликвия",
+    "chapter": 1,
+    "tags": [
+      "tori",
+      "amulet",
+      "temple"
+    ],
+    "prompt": "small white fox familiar, tiny worn gold amulet, pale ribbon collar, little stone charm, curious expression, ancient shrine accessory",
+    "source": "achievement",
+    "is_secret": false
+  },
+  {
+    "id": "s07",
+    "name": "Пробуждённая печать",
+    "rarity": "legendary",
+    "item_type": "outfit",
+    "collection": "Руинная реликвия",
+    "chapter": 1,
+    "tags": [
+      "seal",
+      "ritual",
+      "gold"
+    ],
+    "prompt": "white and black ritual dress, long split cape, glowing gold seal patterns, sheer fitted sleeves, layered skirt, gold throat ornament, cracked halo headpiece, severe sacred elegance",
+    "source": "secret",
+    "is_secret": true
+  },
+  {
+    "id": "s08",
+    "name": "Пепел под шляпкой",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Чаща и тление",
+    "chapter": 2,
+    "tags": [
+      "mushroom",
+      "ember",
+      "lace"
+    ],
+    "prompt": "long deep red capelet with spotted mushroom print, cream fringe trim, off shoulder white sheer leotard, cream lace ascot, red satin ribbon legwear, lace wrist cuffs, gold ember gemstone, butterfly headpiece, vines and moss ornament",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s09",
+    "name": "Моховой шёпот",
+    "rarity": "common",
+    "item_type": "accessory",
+    "collection": "Чаща и тление",
+    "chapter": 2,
+    "tags": [
+      "moss",
+      "vines"
+    ],
+    "prompt": "soft moss shoulder vines, small fern hairpins, pale green ribbon ties, tiny cream flowers, subtle forest ornament, delicate asymmetry",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s10",
+    "name": "Янтарные споры",
+    "rarity": "rare",
+    "item_type": "background",
+    "collection": "Чаща и тление",
+    "chapter": 2,
+    "tags": [
+      "forest",
+      "amber",
+      "spores"
+    ],
+    "prompt": "dark forest clearing, amber spores in the air, wet moss, twisted roots, warm glowing mushrooms, deep green shadows, enchanted dusk atmosphere",
+    "source": "story",
+    "is_secret": false
+  },
+  {
+    "id": "s11",
+    "name": "Лента сладкого леса",
+    "rarity": "rare",
+    "item_type": "accessory",
+    "collection": "Сладкий обман",
+    "chapter": 2,
+    "tags": [
+      "ribbons",
+      "berries",
+      "trap"
+    ],
+    "prompt": "deep berry satin ribbons, layered bow garters, small thorn charms, cream lace trim, glossy red beads, sweet poisonous forest motif",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s12",
+    "name": "Чаща и тление",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Чаща и тление",
+    "chapter": 2,
+    "tags": [
+      "forest",
+      "deep red",
+      "moss"
+    ],
+    "prompt": "dark green fitted dress, deep red layered skirt panels, moss capelet, mushroom embroidery, cream lace edges, vine legwear, ember gemstones, forest relic headpiece",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s13",
+    "name": "Смотрительница ложных троп",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Сладкий обман",
+    "chapter": 2,
+    "tags": [
+      "forest",
+      "danger",
+      "elegant"
+    ],
+    "prompt": "black forest corset dress, asymmetrical moss overskirt, sheer sleeves, thorn lace trim, muted plum ribbons, dark berry gemstones, branch crown, elegant dangerous silhouette",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s14",
+    "name": "Грибной бантик Тори",
+    "rarity": "common",
+    "item_type": "tori",
+    "collection": "Сладкий обман",
+    "chapter": 2,
+    "tags": [
+      "tori",
+      "mushroom",
+      "bow"
+    ],
+    "prompt": "small white fox familiar, tiny red mushroom bow, cream ribbon collar, moss charm, playful curious expression, cute forest accessory",
+    "source": "achievement",
+    "is_secret": false
+  },
+  {
+    "id": "s15",
+    "name": "Искушение в кружевах",
+    "rarity": "legendary",
+    "item_type": "outfit",
+    "collection": "Сладкий обман",
+    "chapter": 2,
+    "tags": [
+      "forest",
+      "lace",
+      "ember"
+    ],
+    "prompt": "deep wine off shoulder dress, sheer black lace sleeves, layered petal skirt, glowing ember beads, cream ribbon details, thorn garters, mushroom veil headpiece, seductive enchanted forest ornament",
+    "source": "chest",
+    "is_secret": true
+  },
+  {
+    "id": "s16",
+    "name": "Витрина у площади",
+    "rarity": "common",
+    "item_type": "background",
+    "collection": "Ателье Таррена",
+    "chapter": 3,
+    "tags": [
+      "city",
+      "shop",
+      "cozy"
+    ],
+    "prompt": "elegant fantasy city storefront, warm window light, pale stone street, fashion mannequins, velvet awning, brass trim, cozy evening atmosphere",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s17",
+    "name": "Бархатный воротник",
+    "rarity": "rare",
+    "item_type": "accessory",
+    "collection": "Ателье Таррена",
+    "chapter": 3,
+    "tags": [
+      "velvet",
+      "ascot",
+      "chic"
+    ],
+    "prompt": "black velvet collar, cream lace ascot, small gold brooch, thin ribbon tails, polished gemstone detail, refined city fashion",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s18",
+    "name": "Гостья Таррена",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Ателье Таррена",
+    "chapter": 3,
+    "tags": [
+      "city",
+      "fashion"
+    ],
+    "prompt": "cream fitted city dress, short black capelet, pleated skirt, gold buttons, sheer stockings, lace gloves, ribbon neckpiece, elegant ankle boots, polished urban fantasy style",
+    "source": "story",
+    "is_secret": false
+  },
+  {
+    "id": "s19",
+    "name": "Перчатки полуночной модистки",
+    "rarity": "common",
+    "item_type": "accessory",
+    "collection": "Полуночный салон",
+    "chapter": 3,
+    "tags": [
+      "gloves",
+      "lace"
+    ],
+    "prompt": "long black lace gloves, scalloped cuffs, tiny satin bows, gold wrist chains, subtle gemstone clasps, refined evening accessory",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s20",
+    "name": "Ателье на четвёртой улице",
+    "rarity": "rare",
+    "item_type": "background",
+    "collection": "Ателье Таррена",
+    "chapter": 3,
+    "tags": [
+      "atelier",
+      "candles"
+    ],
+    "prompt": "luxury fantasy atelier interior, velvet curtains, dress forms, candlelight, gold mirrors, fabric rolls, dark wood, warm elegant atmosphere",
+    "source": "story",
+    "is_secret": false
+  },
+  {
+    "id": "s21",
+    "name": "Хозяйка полуночного салона",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Полуночный салон",
+    "chapter": 3,
+    "tags": [
+      "velvet",
+      "dark",
+      "elegant"
+    ],
+    "prompt": "black velvet evening gown, fitted bodice, layered burgundy skirt, long sheer gloves, cream lace neckline, gold waist chains, dark gemstone earrings, dramatic salon headpiece",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s22",
+    "name": "Серёжки витринного света",
+    "rarity": "rare",
+    "item_type": "accessory",
+    "collection": "Ателье Таррена",
+    "chapter": 3,
+    "tags": [
+      "jewel",
+      "gold",
+      "city"
+    ],
+    "prompt": "small gold drop earrings, faceted champagne gemstones, thin chain tassels, tiny pearl accents, warm shop window sparkle, elegant city jewelry",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s23",
+    "name": "Тори в маленьком плаще",
+    "rarity": "rare",
+    "item_type": "tori",
+    "collection": "Полуночный салон",
+    "chapter": 3,
+    "tags": [
+      "tori",
+      "cape"
+    ],
+    "prompt": "small white fox familiar, miniature black cape with cream lining, tiny gold clasp, neat ribbon collar, proud curious expression, elegant city outfit",
+    "source": "achievement",
+    "is_secret": false
+  },
+  {
+    "id": "s24",
+    "name": "Платье после закрытия",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Полуночный салон",
+    "chapter": 3,
+    "tags": [
+      "luxury",
+      "after hours"
+    ],
+    "prompt": "midnight blue satin dress, low layered overskirt, black lace gloves, silver ribbon waist, sheer stockings, crystal earrings, velvet hair bow, luxurious after-hours salon style",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s25",
+    "name": "Лестница к луне",
+    "rarity": "common",
+    "item_type": "background",
+    "collection": "Лунный Шпиль",
+    "chapter": 4,
+    "tags": [
+      "spire",
+      "night",
+      "moon"
+    ],
+    "prompt": "black stone staircase rising toward a huge moon, silver mist, narrow cold lights, distant spire, starry sky, grand lonely fantasy atmosphere",
+    "source": "shop",
+    "is_secret": false
+  },
+  {
+    "id": "s26",
+    "name": "Серебряный след печати",
+    "rarity": "rare",
+    "item_type": "accessory",
+    "collection": "Печать носительницы",
+    "chapter": 4,
+    "tags": [
+      "sigil",
+      "silver"
+    ],
+    "prompt": "thin silver seal chains, glowing sigil brooch, pale moonstone pendant, delicate wrist markings, cold metallic ornament, ritual accessory",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s27",
+    "name": "Лунный шпиль",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Лунный Шпиль",
+    "chapter": 4,
+    "tags": [
+      "moonlit",
+      "black stone",
+      "silver"
+    ],
+    "prompt": "black and silver long coat dress, sharp layered cape, fitted bodice, sheer dark sleeves, moonstone clasps, silver leg straps, star ornament, cold spire elegance",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s28",
+    "name": "Тори звёздной стужи",
+    "rarity": "epic",
+    "item_type": "tori",
+    "collection": "Лунный Шпиль",
+    "chapter": 4,
+    "tags": [
+      "tori",
+      "frost",
+      "stars"
+    ],
+    "prompt": "small white fox familiar, frosted silver fur tips, tiny star charms, pale blue glow, crystal collar ornament, bright curious eyes, winter magic familiar style",
+    "source": "secret",
+    "is_secret": true
+  },
+  {
+    "id": "s29",
+    "name": "Носительница врат",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Печать носительницы",
+    "chapter": 4,
+    "tags": [
+      "threshold",
+      "ritual"
+    ],
+    "prompt": "dark ivory ritual dress, black structured capelet, silver waist seal, long split skirt, sheer gloves, moonstone jewelry, narrow crown, elegant threshold guardian style",
+    "source": "story",
+    "is_secret": false
+  },
+  {
+    "id": "s30",
+    "name": "Осколок финальной лестницы",
+    "rarity": "rare",
+    "item_type": "background",
+    "collection": "Лунный Шпиль",
+    "chapter": 4,
+    "tags": [
+      "ascent",
+      "spire"
+    ],
+    "prompt": "towering black stairway, fractured silver steps, cold mist, broken arches, distant white light, moonlit fantasy spire atmosphere",
+    "source": "achievement",
+    "is_secret": false
+  },
+  {
+    "id": "s31",
+    "name": "Сердце шпиля",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Печать носительницы",
+    "chapter": 4,
+    "tags": [
+      "power",
+      "ritual"
+    ],
+    "prompt": "black ceremonial gown, silver armored corset accents, long translucent cape, glowing seal at waist, moonstone chains, sharp crown headpiece, powerful ritual silhouette",
+    "source": "story",
+    "is_secret": false
+  },
+  {
+    "id": "s32",
+    "name": "Печать, что смотрит в ответ",
+    "rarity": "legendary",
+    "item_type": "outfit",
+    "collection": "Печать носительницы",
+    "chapter": 4,
+    "tags": [
+      "final",
+      "seal",
+      "power"
+    ],
+    "prompt": "white black and silver final ritual dress, layered long cape, glowing seal lines across fabric, fitted sheer sleeves, moonstone chest ornament, floating ribbon details, fractured halo headpiece, majestic ominous elegance",
+    "source": "story",
+    "is_secret": false
+  }
+]
