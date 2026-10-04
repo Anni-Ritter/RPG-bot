@@ -19,6 +19,11 @@ ACHIEVEMENTS = {
         "coins": 50,
         "dust": 50,
     },
+    "first_manual_workout": {
+        "title": "Арена где угодно",
+        "reward_text": "+20 монет",
+        "coins": 20,
+    },
     "three_bonus_thursdays": {
         "title": "Не ушла",
         "reward_text": "Скрытая награда для Тори",
@@ -118,6 +123,11 @@ async def check_achievements(
 
     if profile.tori_bond >= 100:
         item = await _unlock(session, profile, "tori_bond_100")
+        if item:
+            unlocked.append(item)
+
+    if await _count_events(session, profile.id, "manual_workout_complete") >= 1:
+        item = await _unlock(session, profile, "first_manual_workout")
         if item:
             unlocked.append(item)
 

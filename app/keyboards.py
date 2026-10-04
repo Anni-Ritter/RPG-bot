@@ -5,13 +5,45 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Сегодня"), KeyboardButton(text="🚶 Шаги")],
-            [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="📜 Квесты")],
-            [KeyboardButton(text="🎁 Гардероб"), KeyboardButton(text="📖 История")],
-            [KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="🏋️ Тренировка")],
+            [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
+            [KeyboardButton(text="📖 История"), KeyboardButton(text="🏆 Ачивки")],
         ],
         resize_keyboard=True,
     )
 
+
+
+def manual_workout_type_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💪 Силовая", callback_data="manualworkout:type:strength"),
+                InlineKeyboardButton(text="🧘 Пилатес / растяжка", callback_data="manualworkout:type:pilates"),
+            ],
+            [
+                InlineKeyboardButton(text="❤️ Кардио", callback_data="manualworkout:type:cardio"),
+                InlineKeyboardButton(text="✨ Другое", callback_data="manualworkout:type:other"),
+            ],
+        ]
+    )
+
+
+def manual_workout_duration_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="10 мин", callback_data="manualworkout:minutes:10"),
+                InlineKeyboardButton(text="20 мин", callback_data="manualworkout:minutes:20"),
+                InlineKeyboardButton(text="30 мин", callback_data="manualworkout:minutes:30"),
+            ],
+            [
+                InlineKeyboardButton(text="45 мин", callback_data="manualworkout:minutes:45"),
+                InlineKeyboardButton(text="60+ мин", callback_data="manualworkout:minutes:60"),
+            ],
+            [InlineKeyboardButton(text="⌨️ Ввести минуты", callback_data="manualworkout:minutes:custom")],
+        ]
+    )
 
 def food_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

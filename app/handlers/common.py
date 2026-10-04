@@ -27,6 +27,7 @@ from app.services.phrases import (
 )
 from app.services.rewards import apply_reward, get_or_create_daily, get_or_create_profile
 from app.services.steps import evaluate_steps
+from app.services.self_workouts import weekly_workout_summary
 from app.services.story import get_or_create_story_progress
 
 router = Router()
@@ -68,6 +69,7 @@ async def today(message: Message) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
         stat = await get_or_create_daily(session, profile.id, now_local().date())
+        workout_week = await weekly_workout_summary(session, profile.id, now_local().date())
         await session.commit()
         level, _, next_threshold = level_from_xp(profile.xp)
         next_text = str(next_threshold) if next_threshold is not None else "MAX"
@@ -85,7 +87,10 @@ async def today(message: Message) -> None:
                 f"🍲 Еда: {stat.meals}\n🍎 Перекусы: {stat.snacks}\n"
                 f"☕ Напитки: {stat.drinks} (без добавок {stat.plain_drinks} · калорийные {stat.caloric_drinks})\n"
                 f"⚡ Энергетики: {stat.energy_drinks}\n"
-                f"💧 Вода: {stat.water}\n🚶 Шаги: {stat.steps:,}"
+                f"💧 Вода: {stat.water}\n🚶 Шаги: {stat.steps:,}\n\n"
+                f"🏋️ Тренировки за неделю: {workout_week['count']}\n"
+                f"⏱ Времени: {workout_week['minutes']} мин\n"
+                f"Дополнительные: {workout_week['manual_count']} · зал: {workout_week['scheduled_count']}"
             ).replace(",", " ")
         )
 
