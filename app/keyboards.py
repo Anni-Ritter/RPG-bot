@@ -139,6 +139,12 @@ def wardrobe_menu(chests: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def back_menu(callback_data: str, text: str = "⬅️ Назад") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=callback_data)]]
+    )
+
+
 def scroll_item_menu(scroll_id: str, status: str, favorite: bool) -> InlineKeyboardMarkup:
     rows = []
     if status == "sealed":
@@ -151,15 +157,16 @@ def scroll_item_menu(scroll_id: str, status: str, favorite: bool) -> InlineKeybo
         rows.append([InlineKeyboardButton(text="✅ Отметить как сгенерированный", callback_data=f"scroll:generated:{scroll_id}")])
     fav_label = "💜 Убрать из любимого" if favorite else "♡ В любимое"
     rows.append([InlineKeyboardButton(text=fav_label, callback_data=f"scroll:favorite:{scroll_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ В гардероб", callback_data="wardrobe:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def generation_menu(generation_id: int, is_primary: bool) -> InlineKeyboardMarkup | None:
-    if is_primary:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⭐ Сделать основной", callback_data=f"generation:primary:{generation_id}")]]
-    )
+def generation_menu(generation_id: int, is_primary: bool, scroll_id: str) -> InlineKeyboardMarkup:
+    rows = []
+    if not is_primary:
+        rows.append([InlineKeyboardButton(text="⭐ Сделать основной", callback_data=f"generation:primary:{generation_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ К свитку", callback_data=f"scroll:open:{scroll_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def atelier_shop_menu(coins: int) -> InlineKeyboardMarkup:
@@ -167,6 +174,7 @@ def atelier_shop_menu(coins: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🎴 Таинственный свиток — 150", callback_data="shop:coin:random")],
             [InlineKeyboardButton(text=f"Монеты: {coins}", callback_data="noop")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="wardrobe:menu")],
         ]
     )
 
@@ -177,6 +185,7 @@ def dust_shop_menu(dust: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🎴 Rare+ свиток — 180", callback_data="shop:dust:rare")],
             [InlineKeyboardButton(text="💎 Epic+ свиток — 300", callback_data="shop:dust:epic")],
             [InlineKeyboardButton(text=f"Пыль ателье: {dust}", callback_data="noop")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="wardrobe:menu")],
         ]
     )
 

@@ -10,7 +10,14 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.keyboards import atelier_shop_menu, dust_shop_menu, generation_menu, scroll_item_menu
+from app.keyboards import (
+    atelier_shop_menu,
+    back_menu,
+    dust_shop_menu,
+    generation_menu,
+    scroll_item_menu,
+    wardrobe_menu,
+)
 from app.models import ScrollDefinition, ScrollGeneration, ScrollInventory
 from app.services.assets import send_reaction
 from app.services.gacha import open_trial_chest
@@ -70,6 +77,25 @@ async def _send_scroll_card(callback: CallbackQuery, user_id: int, inv: ScrollIn
         )
 
 
+async def _send_wardrobe_menu(callback: CallbackQuery) -> None:
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        await session.commit()
+    await callback.message.answer(
+        f"Сундуки испытания: {profile.trial_chests}\n"
+        f"Монеты: {profile.coins}\n"
+        f"Пыль ателье: {profile.atelier_dust}",
+        reply_markup=wardrobe_menu(profile.trial_chests),
+    )
+
+
+@router.callback_query(F.data == "wardrobe:menu")
+async def wardrobe_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await _send_wardrobe_menu(callback)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "chest:open")
 async def chest_open(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
@@ -100,6 +126,7 @@ async def chest_open(callback: CallbackQuery) -> None:
         "tori",
         emotion,
         pick(CHEST_RARITY_REACTIONS[rarity]) + "\n\n" + detail,
+        reply_markup=back_menu("wardrobe:menu", "⬅️ В гардероб"),
     )
     await callback.answer()
 
@@ -120,7 +147,10 @@ async def wardrobe_list(callback: CallbackQuery) -> None:
         await session.commit()
 
     if not rows:
-        await callback.message.answer("Пока ни одного свитка.")
+        await callback.message.answer(
+            "Пока ни одного свитка.",
+            reply_markup=back_menu("wardrobe:menu", "⬅️ В гардероб"),
+        )
         await callback.answer()
         return
 
@@ -129,6 +159,32 @@ async def wardrobe_list(callback: CallbackQuery) -> None:
         await _send_scroll_card(callback, user_id, inv, scroll)
     if len(rows) > 20:
         await callback.message.answer("Показываю последние 20, чтобы не устроить свиткопад в чате.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("scroll:open:"))
+async def open_scroll(callback: CallbackQuery, state: FSMContext) -> None:
+    scroll_id = callback.data.rsplit(":", 1)[1]
+    await state.clear()
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        row = (
+            await session.execute(
+                select(ScrollInventory, ScrollDefinition)
+                .join(ScrollDefinition, ScrollDefinition.id == ScrollInventory.scroll_id)
+                .where(
+                    ScrollInventory.user_id == profile.id,
+                    ScrollInventory.scroll_id == scroll_id,
+                )
+            )
+        ).one_or_none()
+        user_id = profile.id
+        await session.commit()
+    if not row:
+        await callback.answer("Свиток не найден.", show_alert=True)
+        return
+    inv, scroll = row
+    await _send_scroll_card(callback, user_id, inv, scroll)
     await callback.answer()
 
 
@@ -156,6 +212,7 @@ async def reveal_scroll(callback: CallbackQuery) -> None:
         f"🔓 «{scroll.name}» раскрыт.\n\n"
         f"🎨 Промпт для генерации: {target}\n\n"
         f"{scroll.prompt}",
+        reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ К свитку"),
     )
     await callback.answer()
 
@@ -176,7 +233,8 @@ async def show_scroll(callback: CallbackQuery) -> None:
     target = get_scroll_target(scroll)
     await callback.message.answer(
         f"🎨 Промпт для генерации: {target}\n\n"
-        f"{scroll.prompt}"
+        f"{scroll.prompt}",
+        reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ К свитку"),
     )
     await callback.answer()
 
@@ -195,7 +253,13 @@ async def generated_scroll(callback: CallbackQuery) -> None:
         inv.status = "generated"
         inv.generated_at = datetime.now(TZ)
         await session.commit()
-    await send_reaction(callback.message, "selin", "soft_smile", "Селин: — Покажешь потом. Я хочу знать, что из этого получилось.")
+    await send_reaction(
+        callback.message,
+        "selin",
+        "soft_smile",
+        "Селин: — Покажешь потом. Я хочу знать, что из этого получилось.",
+        reply_markup=back_menu(f"scroll:open:{scroll_id}", "⬅️ К свитку"),
+    )
     await callback.answer()
 
 
@@ -220,7 +284,8 @@ async def add_scroll_image(callback: CallbackQuery, state: FSMContext) -> None:
     target = get_scroll_target(scroll)
     await callback.message.answer(
         f"🖼 Отправь результат генерации для: {target}\n"
-        f"Свиток: «{scroll.name}»"
+        f"Свиток: «{scroll.name}»",
+        reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ Отмена"),
     )
     await callback.answer()
 
@@ -267,12 +332,18 @@ async def save_scroll_image(message: Message, state: FSMContext) -> None:
         "selin",
         "soft_smile",
         f"Селин: — Вот, теперь другое дело.\nК «{scroll.name}» добавлен вариант #{len(existing) + 1}.",
+        reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ К свитку"),
     )
 
 
 @router.message(ScrollImageState.waiting_photo)
-async def scroll_image_requires_photo(message: Message) -> None:
-    await message.answer("Мне нужна именно картинка. Отправь её как фото, и я привяжу к свитку.")
+async def scroll_image_requires_photo(message: Message, state: FSMContext) -> None:
+    scroll_id = (await state.get_data()).get("scroll_id")
+    reply_markup = back_menu(f"scroll:open:{scroll_id}", "⬅️ Отмена") if scroll_id else None
+    await message.answer(
+        "Мне нужна именно картинка. Отправь её как фото, и я привяжу к свитку.",
+        reply_markup=reply_markup,
+    )
 
 
 @router.callback_query(F.data.startswith("scroll:gallery:"))
@@ -297,7 +368,7 @@ async def scroll_gallery(callback: CallbackQuery) -> None:
         await callback.message.answer_photo(
             generation.telegram_file_id,
             caption=f"{scroll.name} · вариант {index}{primary}",
-            reply_markup=generation_menu(generation.id, generation.is_primary),
+            reply_markup=generation_menu(generation.id, generation.is_primary, scroll.id),
         )
     await callback.answer()
 
@@ -375,6 +446,7 @@ async def buy_atelier_scroll(callback: CallbackQuery) -> None:
         "tori",
         "treasure",
         f"🎴 Получен запечатанный свиток «{scroll.name}».\n{scroll.rarity.upper()} · {' / '.join(scroll.tags[:3])}",
+        reply_markup=back_menu("shop:atelier", "⬅️ В ателье"),
     )
     await callback.answer()
 
@@ -417,6 +489,7 @@ async def _buy_with_dust(callback: CallbackQuery, min_rarities: set[str], price:
         "tori",
         "treasure",
         f"✨ Пыль собралась в запечатанный свиток «{scroll.name}».\n{scroll.rarity.upper()}",
+        reply_markup=back_menu("shop:dust", "⬅️ В магазин Пыли"),
     )
     await callback.answer()
 
