@@ -131,7 +131,7 @@ async def selin_chat(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("selinchat:"))
+@router.callback_query(F.data.regexp(r"^selinchat:(self|seal|how|tori|sit)$"))
 async def selin_chat_topic(callback: CallbackQuery) -> None:
     topic = callback.data.split(":", 1)[1]
     if topic not in {"self", "seal", "how", "tori", "sit"}:
