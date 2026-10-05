@@ -14,8 +14,11 @@ from app.db import SessionLocal
 from app.keyboards import back_menu, drink_menu, food_menu, main_menu, quest_menu, temptation_menu, wardrobe_menu
 from app.models import CustomQuest, Notification, PendingTemptation, UserAchievement
 from app.services.achievements import achievement_messages, check_achievements
+from app.services.ai_engine import ai_enabled
+from app.services.ai_features import available_chat_sessions, get_or_create_ai_state, xp_until_next_chat
 from app.services.assets import send_background, send_reaction, step_reaction_emotion
 from app.services.levels import level_from_xp
+from app.services.nutrition import daily_nutrition_totals
 from app.services.phrases import (
     DRINK_REACTIONS,
     MEAL_REACTIONS,
@@ -87,6 +90,11 @@ async def today(message: Message) -> None:
         initialize_week1_v2(progress, profile, today_date)
         advance_week1_if_due(progress, today_date)
         workout_week = await weekly_workout_summary(session, profile.id, today_date)
+        nutrition = await daily_nutrition_totals(session, profile.id, today_date)
+        ai_state = await get_or_create_ai_state(session, profile)
+        ai_sessions = available_chat_sessions(profile, ai_state)
+        ai_need = xp_until_next_chat(profile, ai_state)
+        ai_turns = ai_state.active_turns_left
         level, current_threshold, next_threshold = level_from_xp(profile.xp)
         day = story_day(progress, today_date)
         objective = current_story_objective(profile, progress, today_date)
@@ -101,6 +109,23 @@ async def today(message: Message) -> None:
         sync_line = f"Уровень {level} · {profile.xp} / {next_threshold} XP"
         to_next = f"До следующего уровня: {max(0, next_threshold - profile.xp)} XP"
 
+    if ai_turns > 0:
+        ai_line = f"✨ Свободный разговор: активен · осталось {ai_turns} ответов"
+    elif ai_sessions > 0:
+        ai_line = f"✨ Свободные разговоры: {ai_sessions} в запасе"
+    elif ai_enabled():
+        ai_line = f"✨ До следующего разговора: {ai_need} XP"
+    else:
+        ai_line = "✨ AI-общение: не настроено"
+
+    nutrition_line = ""
+    if nutrition["count"] > 0:
+        nutrition_line = (
+            f"\n📐 КБЖУ по распознанным записям: {nutrition['calories_kcal']} ккал"
+            f" · Б {nutrition['protein_g']:g} · Ж {nutrition['fat_g']:g} · У {nutrition['carbs_g']:g}"
+            f" ({nutrition['count']} шт.)"
+        )
+
     chapter = "Руины" if day <= 7 else ({2: "Лес", 3: "Таррен", 4: "Шпиль"}.get(((day - 1) // 7) + 1, "История"))
     await send_background(
         message,
@@ -113,12 +138,13 @@ async def today(message: Message) -> None:
             f"Следующее открытие: {next_sync_unlock(level)}\n\n"
             f"💪 Сила: {profile.strength} · 🜂 Воля: {profile.willpower}\n"
             f"💬 Селин: {relation}\n"
-            f"🦊 Тори: {profile.tori_bond} · {tori_relation}\n\n"
+            f"🦊 Тори: {profile.tori_bond} · {tori_relation}\n"
+            f"{ai_line}\n\n"
             f"🎯 Текущая сюжетная задача:\n{objective}\n\n"
             f"Сегодня:\n"
             f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks}\n"
             f"☕ Напитки: {stat.drinks} · ⚡ Энергетики: {stat.energy_drinks}\n"
-            f"💧 Вода: {stat.water} · 🚶 Шаги: {stat.steps:,}\n"
+            f"💧 Вода: {stat.water} · 🚶 Шаги: {stat.steps:,}{nutrition_line}\n"
             f"🏋️ Тренировки за неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
             f"Ателье: {profile.coins} монет · {profile.atelier_dust} Пыли · {profile.trial_chests} сундуков"
         ).replace(",", " "),

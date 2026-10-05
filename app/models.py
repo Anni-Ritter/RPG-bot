@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Float,
     Integer,
     String,
     Text,
@@ -221,3 +222,83 @@ class UserAchievement(Base):
     title: Mapped[str] = mapped_column(String(160))
     reward_text: Mapped[str] = mapped_column(String(240), default="")
     unlocked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIChatState(Base):
+    __tablename__ = "ai_chat_state"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("user_profiles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    xp_accounted: Mapped[int] = mapped_column(Integer, default=0)
+    active_turns_left: Mapped[int] = mapped_column(Integer, default=0)
+    recent_messages: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    last_initiative_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AIQuestOffer(Base):
+    __tablename__ = "ai_quest_offers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    offered_on: Mapped[date] = mapped_column(Date, index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    difficulty: Mapped[str] = mapped_column(String(20), default="easy")
+    reason: Mapped[str] = mapped_column(String(320), default="")
+    reward_xp: Mapped[int] = mapped_column(Integer, default=10)
+    reward_coins: Mapped[int] = mapped_column(Integer, default=2)
+    status: Mapped[str] = mapped_column(String(20), default="offered", index=True)
+    custom_quest_id: Mapped[int | None] = mapped_column(ForeignKey("custom_quests.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIImageAnalysis(Base):
+    __tablename__ = "ai_image_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    analysis_type: Mapped[str] = mapped_column(String(20), index=True)
+    telegram_file_id: Mapped[str] = mapped_column(String(512))
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FoodNutritionLog(Base):
+    __tablename__ = "food_nutrition_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    logged_on: Mapped[date] = mapped_column(Date, index=True)
+    analysis_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_image_analyses.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    category: Mapped[str] = mapped_column(String(20), default="meal")
+    description: Mapped[str] = mapped_column(String(300), default="")
+    nutrition_source: Mapped[str] = mapped_column(String(30), default="none")
+    confidence: Mapped[str] = mapped_column(String(20), default="low")
+    portion_label: Mapped[str] = mapped_column(String(80), default="вся порция")
+    portion_grams: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calories_kcal: Mapped[float | None] = mapped_column(Float, nullable=True)
+    protein_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fat_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    carbs_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIUsageDaily(Base):
+    __tablename__ = "ai_usage_daily"
+    __table_args__ = (UniqueConstraint("user_id", "usage_date", name="uq_ai_usage_user_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    usage_date: Mapped[date] = mapped_column(Date, index=True)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+    chat_calls: Mapped[int] = mapped_column(Integer, default=0)
+    vision_calls: Mapped[int] = mapped_column(Integer, default=0)
+    initiative_calls: Mapped[int] = mapped_column(Integer, default=0)

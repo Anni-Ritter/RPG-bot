@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import (
+    ai_quest_offer_menu,
     monday_finish_menu,
     temptation_after_pause_menu,
     thursday_second_menu,
@@ -18,6 +19,15 @@ from app.keyboards import (
 )
 from app.models import Notification, PendingTemptation, UserProfile, WorkoutSession
 from app.services.assets import send_reaction_to_chat
+from app.services.ai_engine import ai_enabled, generate_selin_initiative
+from app.services.ai_features import (
+    build_ai_context,
+    can_offer_ai_quest,
+    create_ai_quest_offer,
+    get_or_create_ai_state,
+    reserve_ai_call,
+)
+from app.services.levels import level_from_xp
 from app.services.dialogue import pick_dialogue
 from app.services.story import get_or_create_story_progress, story_chapter, story_day
 
@@ -117,7 +127,54 @@ async def send_due(bot: Bot) -> None:
             chapter = story_chapter(story_day(progress, now.date()))
 
             if n.kind == "activity_nudge":
-                await send_reaction_to_chat(bot, telegram_id, "tori", "at_door", pick_dialogue("activity_nudge", chapter))
+                sent_ai = False
+                profile = await session.get(UserProfile, n.user_id)
+                if profile and ai_enabled():
+                    level, _, _ = level_from_xp(profile.xp)
+                    if level >= 2 and await reserve_ai_call(session, profile.id, "initiative"):
+                        try:
+                            context = await build_ai_context(session, profile)
+                            can_offer = await can_offer_ai_quest(session, profile.id, now.date())
+                            # Release the SQLite write transaction before the network call.
+                            await session.commit()
+                            result = await generate_selin_initiative(context=context, can_offer_quest=can_offer)
+                            offer = None
+                            if result.get("offer_quest") and can_offer:
+                                title = str(result.get("quest_title") or "").strip()
+                                if title:
+                                    offer = await create_ai_quest_offer(
+                                        session,
+                                        profile,
+                                        title=title,
+                                        difficulty=str(result.get("quest_difficulty") or "easy"),
+                                        reason=str(result.get("quest_reason") or ""),
+                                    )
+                            text = str(result.get("text") or "Ты сегодня вообще собираешься двигаться?")
+                            markup = None
+                            if offer:
+                                text += (
+                                    f"\n\n📜 Задание: {offer.title}"
+                                    f"\nНаграда: +{offer.reward_xp} XP · +{offer.reward_coins} монет"
+                                )
+                                if offer.reason:
+                                    text += f"\n{offer.reason}"
+                                markup = ai_quest_offer_menu(offer.id)
+                            await send_reaction_to_chat(
+                                bot, telegram_id, "selin", str(result.get("emotion") or "neutral"), text,
+                                reply_markup=markup,
+                            )
+                            if result.get("show_tori") and str(result.get("tori_text") or "").strip():
+                                await send_reaction_to_chat(
+                                    bot, telegram_id, "tori", str(result.get("tori_emotion") or "neutral"),
+                                    str(result.get("tori_text")),
+                                )
+                            ai_state = await get_or_create_ai_state(session, profile)
+                            ai_state.last_initiative_on = now.date()
+                            sent_ai = True
+                        except Exception as exc:
+                            print("AI initiative error:", repr(exc))
+                if not sent_ai:
+                    await send_reaction_to_chat(bot, telegram_id, "tori", "at_door", pick_dialogue("activity_nudge", chapter))
 
             elif n.kind == "monday_start":
                 await send_reaction_to_chat(

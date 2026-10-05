@@ -8,7 +8,7 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="🏋️ Тренировка")],
             [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
             [KeyboardButton(text="📖 История"), KeyboardButton(text="💬 Селин")],
-            [KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="📷 Анализ фото"), KeyboardButton(text="🏆 Ачивки")],
         ],
         resize_keyboard=True,
     )
@@ -224,6 +224,7 @@ def story_v2_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup
 
 def selin_chat_menu(include_tori: bool = True) -> InlineKeyboardMarkup:
     rows = [
+        [InlineKeyboardButton(text="✨ Свободный разговор", callback_data="selinchat:free")],
         [InlineKeyboardButton(text="О тебе", callback_data="selinchat:self")],
         [InlineKeyboardButton(text="О Печати", callback_data="selinchat:seal")],
         [InlineKeyboardButton(text="Как ты?", callback_data="selinchat:how")],
@@ -232,3 +233,77 @@ def selin_chat_menu(include_tori: bool = True) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="О Тори", callback_data="selinchat:tori")])
     rows.append([InlineKeyboardButton(text="Просто посидеть рядом", callback_data="selinchat:sit")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ai_chat_stop_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🛑 Закончить разговор", callback_data="aichat:stop")]]
+    )
+
+
+def ai_quest_offer_menu(offer_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📜 Взять задание", callback_data=f"aiquest:accept:{offer_id}")],
+            [InlineKeyboardButton(text="Не сейчас", callback_data=f"aiquest:decline:{offer_id}")],
+        ]
+    )
+
+
+def photo_kind_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🍽 Еда / напиток", callback_data="photoai:kind:food")],
+            [InlineKeyboardButton(text="⌚ Активность / часы", callback_data="photoai:kind:activity")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="photoai:cancel")],
+        ]
+    )
+
+
+def food_photo_prepare_menu(has_second_photo: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="🔎 Посчитать", callback_data="photoai:food:analyze")],
+    ]
+    if not has_second_photo:
+        rows.append([InlineKeyboardButton(text="📷 Добавить второе фото", callback_data="photoai:food:add_photo")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="photoai:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def food_analysis_menu(analysis_id: int, *, can_enter_grams: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="✅ Записать всю порцию", callback_data=f"photoai:portion:full:{analysis_id}")],
+        [
+            InlineKeyboardButton(text="½ порции", callback_data=f"photoai:portion:half:{analysis_id}"),
+            InlineKeyboardButton(text="⅓ порции", callback_data=f"photoai:portion:third:{analysis_id}"),
+        ],
+    ]
+    if can_enter_grams:
+        rows.append([InlineKeyboardButton(text="⌨️ Ввести граммы", callback_data=f"photoai:portion:grams:{analysis_id}")])
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="✏️ Исправить категорию", callback_data=f"photoai:foodcategory:{analysis_id}")],
+            [InlineKeyboardButton(text="❌ Не записывать", callback_data=f"photoai:discard:{analysis_id}")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def food_category_menu(analysis_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🍲 Полноценная еда", callback_data=f"photoai:foodcat:meal:{analysis_id}")],
+            [InlineKeyboardButton(text="🍎 Перекус", callback_data=f"photoai:foodcat:snack:{analysis_id}")],
+            [InlineKeyboardButton(text="☕ Напиток", callback_data=f"photoai:foodcat:drink:{analysis_id}")],
+            [InlineKeyboardButton(text="❌ Не записывать", callback_data=f"photoai:discard:{analysis_id}")],
+        ]
+    )
+
+
+def activity_analysis_menu(analysis_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Записать найденное", callback_data=f"photoai:activity:accept:{analysis_id}")],
+            [InlineKeyboardButton(text="❌ Не записывать", callback_data=f"photoai:discard:{analysis_id}")],
+        ]
+    )
