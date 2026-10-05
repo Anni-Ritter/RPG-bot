@@ -302,3 +302,65 @@ class AIUsageDaily(Base):
     chat_calls: Mapped[int] = mapped_column(Integer, default=0)
     vision_calls: Mapped[int] = mapped_column(Integer, default=0)
     initiative_calls: Mapped[int] = mapped_column(Integer, default=0)
+
+class UserMemory(Base):
+    __tablename__ = "user_memories"
+    __table_args__ = (UniqueConstraint("user_id", "memory_key", name="uq_user_memory_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    memory_key: Mapped[str] = mapped_column(String(120))
+    category: Mapped[str] = mapped_column(String(40), default="general")
+    value: Mapped[str] = mapped_column(String(500))
+    source: Mapped[str] = mapped_column(String(40), default="chat")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class UserCoachRules(Base):
+    __tablename__ = "user_coach_rules"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), primary_key=True)
+    rules: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+
+
+class UserNutritionGoal(Base):
+    __tablename__ = "user_nutrition_goals"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), primary_key=True)
+    calorie_target_kcal: Mapped[int] = mapped_column(Integer, default=1500)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DailyChallengePlan(Base):
+    __tablename__ = "daily_challenge_plans"
+    __table_args__ = (UniqueConstraint("user_id", "challenge_date", name="uq_daily_challenge_user_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    challenge_date: Mapped[date] = mapped_column(Date, index=True)
+    options: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    selected: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="choosing", index=True)
+    reward_xp: Mapped[int] = mapped_column(Integer, default=60)
+    reward_coins: Mapped[int] = mapped_column(Integer, default=15)
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EveningNutritionReview(Base):
+    __tablename__ = "evening_nutrition_reviews"
+    __table_args__ = (UniqueConstraint("user_id", "review_date", name="uq_evening_review_user_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    review_date: Mapped[date] = mapped_column(Date, index=True)
+    text: Mapped[str] = mapped_column(Text)
+    emotion: Mapped[str] = mapped_column(String(30), default="neutral")
+    tomorrow_focus: Mapped[str] = mapped_column(String(320), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+

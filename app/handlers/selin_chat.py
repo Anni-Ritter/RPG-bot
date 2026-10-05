@@ -10,7 +10,6 @@ from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import selin_chat_menu
 from app.services.assets import send_reaction
-from app.services.levels import level_from_xp
 from app.services.rewards import get_or_create_profile
 from app.services.story import (
     add_affinity,
@@ -21,6 +20,7 @@ from app.services.story import (
     initialize_week1_v2,
     set_story_flag,
     story_day,
+    selin_chat_gate,
 )
 
 router = Router()
@@ -109,16 +109,16 @@ async def selin_chat(message: Message) -> None:
         initialize_week1_v2(progress, profile, today)
         advance_week1_if_due(progress, today)
         day = story_day(progress, today)
-        level, _, next_threshold = level_from_xp(profile.xp)
         relation = affinity_label(progress)
+        allowed, reason = selin_chat_gate(profile, progress, today)
         await session.commit()
 
-    if level < 2:
+    if not allowed:
         await send_reaction(
             message,
             "selin",
             "neutral",
-            f"Связь пока слишком слабая для нормального разговора.\n\nСинхронизация: {profile.xp} / {next_threshold or 250} XP\nНа уровне 2 разговоры с Селин откроются полностью.",
+            f"— Сейчас связь не даёт нормально поговорить.\n\n{reason}",
         )
         return
 
@@ -144,9 +144,9 @@ async def selin_chat_topic(callback: CallbackQuery) -> None:
         progress = await get_or_create_story_progress(session, profile.id, today)
         initialize_week1_v2(progress, profile, today)
         advance_week1_if_due(progress, today)
-        level, _, _ = level_from_xp(profile.xp)
-        if level < 2:
-            await callback.answer("Разговоры откроются на уровне синхронизации 2.", show_alert=True)
+        allowed, reason = selin_chat_gate(profile, progress, today)
+        if not allowed:
+            await callback.answer(reason[:180], show_alert=True)
             return
 
         day = story_day(progress, today)

@@ -12,24 +12,21 @@ from app.keyboards import ai_chat_stop_menu, ai_initiative_stop_menu, ai_quest_o
 from app.models import AIQuestOffer, Notification
 from app.services.ai_engine import ai_enabled, generate_selin_reply
 from app.services.ai_features import (
-    CHAT_SESSION_XP,
     accept_ai_quest,
     append_recent_message,
-    available_chat_sessions,
-    begin_chat_session,
     build_ai_context,
     can_offer_ai_quest,
     create_ai_quest_offer,
     get_or_create_ai_state,
     recent_chat_text,
     reserve_ai_call,
-    xp_until_next_chat,
+    store_ai_memories,
     now_local,
 )
 from app.services.assets import send_reaction
 from app.services.dialogue import get_tori_autonomous_response
-from app.services.levels import level_from_xp
 from app.services.rewards import get_or_create_profile
+from app.services.story import advance_week1_if_due, get_or_create_story_progress, initialize_week1_v2, selin_chat_gate
 
 router = Router()
 
@@ -44,7 +41,7 @@ class InitiativeSelinChatState(StatesGroup):
 
 NAVIGATION_TEXTS = {
     "📊 Сегодня", "🚶 Шаги", "🍽 Еда", "🏋️ Тренировка", "📜 Квесты",
-    "🎁 Гардероб", "📖 История", "💬 Селин", "🏆 Ачивки", "📷 Анализ фото",
+    "🎁 Гардероб", "📖 История", "💬 Селин", "🏆 Ачивки", "📷 Анализ фото", "🎯 Челлендж",
 }
 
 
@@ -75,11 +72,7 @@ async def _active_initiative_notification(session, profile_id: int) -> Notificat
     )
     for row in rows:
         payload = dict(row.payload or {})
-        if (
-            payload.get("event_type") == "selin"
-            and payload.get("status") == "talking"
-            and int(payload.get("turns_left") or 0) > 0
-        ):
+        if payload.get("event_type") == "selin" and payload.get("status") == "talking":
             return row
     return None
 
@@ -129,29 +122,19 @@ async def start_free_chat(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
 
+    today = now_local().date()
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        level, _, _ = level_from_xp(profile.xp)
-        if level < 2:
-            await callback.answer("Свободный разговор откроется на уровне синхронизации 2.", show_alert=True)
+        progress = await get_or_create_story_progress(session, profile.id, today)
+        initialize_week1_v2(progress, profile, today)
+        advance_week1_if_due(progress, today)
+        allowed, reason = selin_chat_gate(profile, progress, today)
+        if not allowed:
+            await session.commit()
+            await callback.answer()
+            await send_reaction(callback.message, "selin", "neutral", f"— Сейчас не получится нормально поговорить.\n\n{reason}")
             return
-
-        ai_state = await get_or_create_ai_state(session, profile)
-        if ai_state.active_turns_left <= 0:
-            if not begin_chat_session(profile, ai_state):
-                need = xp_until_next_chat(profile, ai_state)
-                await session.commit()
-                await callback.answer()
-                await send_reaction(
-                    callback.message,
-                    "selin",
-                    "smirk",
-                    f"— Поболтать можно. Но связь сейчас слабовата. Заработай ещё {need} XP.\n\n"
-                    f"Каждые {CHAT_SESSION_XP} новых XP открывают один свободный разговор. Сам XP и уровень при этом не тратятся.",
-                )
-                return
-        turns = ai_state.active_turns_left
-        banked = available_chat_sessions(profile, ai_state)
+        await get_or_create_ai_state(session, profile)
         await _supersede_initiative_chats(session, profile.id)
         await session.commit()
 
@@ -160,7 +143,7 @@ async def start_free_chat(callback: CallbackQuery, state: FSMContext) -> None:
         callback.message,
         "selin",
         "curious",
-        f"— Ладно, я слушаю.\n\nНа эту беседу: {turns} ответов. Ещё разговоров в запасе: {banked}.",
+        "— Ладно, я слушаю. Можем говорить сколько хочешь, пока связь по сюжету не занята чем-то более весёлым.",
         reply_markup=ai_chat_stop_menu(),
     )
     await callback.answer()
@@ -178,36 +161,31 @@ async def free_chat_message(message: Message, state: FSMContext) -> None:
     user_text = (message.text or "").strip()
     if not user_text:
         return
-
-    # Do not accidentally eat the normal reply-keyboard navigation.
     if user_text in NAVIGATION_TEXTS:
         await message.answer("Сначала закончи свободный разговор кнопкой «🛑 Закончить разговор».")
         return
 
+    today = now_local().date()
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
-        ai_state = await get_or_create_ai_state(session, profile)
-        if ai_state.active_turns_left <= 0:
-            need = xp_until_next_chat(profile, ai_state)
+        progress = await get_or_create_story_progress(session, profile.id, today)
+        initialize_week1_v2(progress, profile, today)
+        advance_week1_if_due(progress, today)
+        allowed, reason = selin_chat_gate(profile, progress, today)
+        if not allowed:
             await session.commit()
             await state.clear()
-            await send_reaction(
-                message,
-                "selin",
-                "neutral",
-                f"— Всё, на сегодня связь для этого разговора закончилась.\n\nДо следующего разговора: {need} XP.",
-            )
+            await send_reaction(message, "selin", "neutral", f"— Связь опять срывается.\n\n{reason}")
             return
 
         if not await reserve_ai_call(session, profile.id, "chat"):
             await session.commit()
-            await message.answer("На сегодня достигнут защитный лимит AI-запросов. Завтра счётчик обнулится.")
+            await message.answer("AI сейчас временно недоступен.")
             return
-
+        ai_state = await get_or_create_ai_state(session, profile)
         context = await build_ai_context(session, profile)
         recent = recent_chat_text(ai_state)
-        context_today = now_local().date()
-        can_offer = await can_offer_ai_quest(session, profile.id, context_today)
+        can_offer = await can_offer_ai_quest(session, profile.id, today)
         await session.commit()
 
     try:
@@ -219,23 +197,18 @@ async def free_chat_message(message: Message, state: FSMContext) -> None:
         )
     except Exception as exc:
         print("AI chat error:", repr(exc))
-        await message.answer("Связь с Селин сейчас сбоила. XP за разговор не пропал — попробуй ещё раз чуть позже.")
+        await message.answer("Связь с Селин сейчас сбоила. Попробуй ещё раз чуть позже.")
         return
 
     offer = None
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
         ai_state = await get_or_create_ai_state(session, profile)
-        if ai_state.active_turns_left <= 0:
-            await state.clear()
-            await message.answer("Этот разговор уже закончился.")
-            return
-
         append_recent_message(ai_state, "user", user_text)
         append_recent_message(ai_state, "assistant", str(result.get("text", "")))
-        ai_state.active_turns_left -= 1
+        await store_ai_memories(session, profile.id, result.get("memories_to_save"), source="selin_chat")
 
-        if result.get("offer_quest") and await can_offer_ai_quest(session, profile.id, context_today):
+        if result.get("offer_quest") and await can_offer_ai_quest(session, profile.id, today):
             title = (result.get("quest_title") or "").strip()
             if title:
                 offer = await create_ai_quest_offer(
@@ -245,7 +218,6 @@ async def free_chat_message(message: Message, state: FSMContext) -> None:
                     difficulty=str(result.get("quest_difficulty") or "easy"),
                     reason=str(result.get("quest_reason") or ""),
                 )
-        turns_left = ai_state.active_turns_left
         await session.commit()
 
     text = str(result.get("text") or "Хм.")
@@ -258,8 +230,7 @@ async def free_chat_message(message: Message, state: FSMContext) -> None:
             text += f"\n{offer.reason}"
         markup = ai_quest_offer_menu(offer.id)
     else:
-        text += f"\n\nОсталось ответов в этой беседе: {turns_left}."
-        markup = ai_chat_stop_menu() if turns_left > 0 else None
+        markup = ai_chat_stop_menu()
 
     await send_reaction(
         message,
@@ -275,8 +246,6 @@ async def free_chat_message(message: Message, state: FSMContext) -> None:
             str(result.get("tori_emotion") or "neutral"),
             str(result.get("tori_text")),
         )
-    if turns_left <= 0:
-        await state.clear()
 
 
 @router.callback_query(F.data.startswith("initiative:reply:"))
@@ -303,7 +272,6 @@ async def start_initiative_chat(callback: CallbackQuery, state: FSMContext) -> N
             await callback.answer("Это сообщение уже осталось в прошлом.", show_alert=True)
             return
         payload["status"] = "talking"
-        payload["turns_left"] = max(1, int(payload.get("turns_left") or 3))
         notification.payload = payload
         await _supersede_initiative_chats(
             session,
@@ -319,7 +287,7 @@ async def start_initiative_chat(callback: CallbackQuery, state: FSMContext) -> N
         callback.message,
         "selin",
         "curious",
-        f"— Я слушаю.\n\nМожно ответить ещё {payload['turns_left']} раза.",
+        "— Я слушаю. Отвечай сколько хочешь, пока сама не закончишь разговор.",
         reply_markup=ai_initiative_stop_menu(notification_id),
     )
 
@@ -390,8 +358,7 @@ async def _handle_initiative_message(
             await message.answer("Этот разговор больше недоступен.")
             return
         payload = dict(notification.payload or {})
-        turns_left = int(payload.get("turns_left") or 0)
-        if payload.get("event_type") != "selin" or payload.get("status") != "talking" or turns_left <= 0:
+        if payload.get("event_type") != "selin" or payload.get("status") != "talking":
             await state.clear()
             await message.answer("Этот разговор уже закончился.")
             return
@@ -432,20 +399,12 @@ async def _handle_initiative_message(
         ai_state = await get_or_create_ai_state(session, profile)
         append_recent_message(ai_state, "user", user_text)
         append_recent_message(ai_state, "assistant", str(result.get("text") or ""))
-        turns_left = max(0, int(payload.get("turns_left") or 0) - 1)
-        payload["turns_left"] = turns_left
-        if turns_left == 0:
-            payload["status"] = "completed"
+        await store_ai_memories(session, profile.id, result.get("memories_to_save"), source="initiative_chat")
         notification.payload = payload
         await session.commit()
 
     text = str(result.get("text") or "Хм.")
-    if turns_left > 0:
-        text += f"\n\nОсталось ответов в этом разговоре: {turns_left}."
-        markup = ai_initiative_stop_menu(notification_id)
-    else:
-        text += "\n\nНа этом короткий разговор закончился."
-        markup = None
+    markup = ai_initiative_stop_menu(notification_id)
 
     await send_reaction(
         message,
@@ -461,8 +420,6 @@ async def _handle_initiative_message(
             str(result.get("tori_emotion") or "neutral"),
             str(result.get("tori_text")),
         )
-    if turns_left <= 0:
-        await state.clear()
 
 
 @router.message(InitiativeSelinChatState.talking, F.text)

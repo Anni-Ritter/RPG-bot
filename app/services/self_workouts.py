@@ -210,3 +210,44 @@ async def weekly_workout_summary(session: AsyncSession, user_id: int, today: dat
         "scheduled_count": len(scheduled),
         "by_kind": by_kind,
     }
+
+
+async def daily_workout_minutes(session: AsyncSession, user_id: int, day: date) -> int:
+    """Best-effort total workout minutes for one day from manual + scheduled sessions."""
+    total = 0
+    manual_events = list(
+        (
+            await session.scalars(
+                select(GameEvent).where(
+                    GameEvent.user_id == user_id,
+                    GameEvent.event_type == "manual_workout_complete",
+                )
+            )
+        ).all()
+    )
+    for event in manual_events:
+        payload = event.payload or {}
+        if payload.get("workout_date") == day.isoformat():
+            total += int(payload.get("minutes") or 0)
+
+    scheduled = list(
+        (
+            await session.scalars(
+                select(WorkoutSession).where(
+                    WorkoutSession.user_id == user_id,
+                    WorkoutSession.workout_date == day,
+                    WorkoutSession.status == "completed",
+                    WorkoutSession.kind.in_(["monday", "thursday_first", "thursday_bonus"]),
+                )
+            )
+        ).all()
+    )
+    for workout in scheduled:
+        if workout.started_at and workout.completed_at:
+            try:
+                seconds = (workout.completed_at - workout.started_at).total_seconds()
+                if seconds > 0:
+                    total += int(round(seconds / 60))
+            except (TypeError, ValueError):
+                pass
+    return total

@@ -15,7 +15,7 @@ from app.keyboards import back_menu, drink_menu, food_menu, main_menu, quest_men
 from app.models import CustomQuest, Notification, PendingTemptation, UserAchievement
 from app.services.achievements import achievement_messages, check_achievements
 from app.services.ai_engine import ai_enabled
-from app.services.ai_features import available_chat_sessions, get_or_create_ai_state, xp_until_next_chat
+from app.services.ai_features import daily_treat_count, get_calorie_target
 from app.services.assets import send_background, send_reaction, step_reaction_emotion
 from app.services.levels import level_from_xp
 from app.services.nutrition import daily_nutrition_totals
@@ -31,10 +31,11 @@ from app.services.phrases import (
 from app.services.rewards import apply_reward, get_or_create_daily, get_or_create_profile
 from app.services.steps import evaluate_steps
 from app.services.self_workouts import weekly_workout_summary
+from app.services.challenges import challenge_value, get_plan, progress_text
 from app.services.story import (
     advance_week1_if_due, affinity_label, current_story_objective,
     get_or_create_story_progress, initialize_week1_v2, next_sync_unlock,
-    story_day, tori_bond_label,
+    selin_chat_gate, story_day, tori_bond_label,
 )
 
 router = Router()
@@ -91,15 +92,27 @@ async def today(message: Message) -> None:
         advance_week1_if_due(progress, today_date)
         workout_week = await weekly_workout_summary(session, profile.id, today_date)
         nutrition = await daily_nutrition_totals(session, profile.id, today_date)
-        ai_state = await get_or_create_ai_state(session, profile)
-        ai_sessions = available_chat_sessions(profile, ai_state)
-        ai_need = xp_until_next_chat(profile, ai_state)
-        ai_turns = ai_state.active_turns_left
+        treats = await daily_treat_count(session, profile.id, today_date)
+        calorie_target = await get_calorie_target(session, profile.id)
         level, current_threshold, next_threshold = level_from_xp(profile.xp)
         day = story_day(progress, today_date)
         objective = current_story_objective(profile, progress, today_date)
         relation = affinity_label(progress)
         tori_relation = tori_bond_label(profile.tori_bond)
+        chat_allowed, chat_reason = selin_chat_gate(profile, progress, today_date)
+        challenge = await get_plan(session, profile.id, today_date)
+        challenge_line = "🎯 Челлендж: ещё не выбран"
+        if challenge and challenge.status == "active" and challenge.selected:
+            current = await challenge_value(session, profile, challenge)
+            selected = dict(challenge.selected or {})
+            challenge_line = (
+                f"🎯 {selected.get('title', 'Челлендж')}: "
+                + progress_text(str(selected.get('code') or ''), current, int(selected.get('target') or 0))
+            )
+        elif challenge and challenge.status == "completed":
+            challenge_line = "🎯 Челлендж: выполнен ✅"
+        elif challenge and challenge.status == "failed":
+            challenge_line = "🎯 Челлендж: не выполнен"
         await session.commit()
 
     if next_threshold is None:
@@ -109,21 +122,22 @@ async def today(message: Message) -> None:
         sync_line = f"Уровень {level} · {profile.xp} / {next_threshold} XP"
         to_next = f"До следующего уровня: {max(0, next_threshold - profile.xp)} XP"
 
-    if ai_turns > 0:
-        ai_line = f"✨ Свободный разговор: активен · осталось {ai_turns} ответов"
-    elif ai_sessions > 0:
-        ai_line = f"✨ Свободные разговоры: {ai_sessions} в запасе"
-    elif ai_enabled():
-        ai_line = f"✨ До следующего разговора: {ai_need} XP"
-    else:
+    if not ai_enabled():
         ai_line = "✨ AI-общение: не настроено"
+    elif chat_allowed:
+        ai_line = "💬 Селин: свободный разговор доступен"
+    else:
+        ai_line = f"💬 Селин: связь занята сюжетом — {chat_reason}"
 
-    nutrition_line = ""
+
+    nutrition_line = f"\n🧭 Ориентир по энергии: около {calorie_target} ккал"
     if nutrition["count"] > 0:
-        nutrition_line = (
+        delta = int(nutrition["calories_kcal"]) - int(calorie_target)
+        delta_text = f" · {delta:+d} к ориентиру" if delta else " · по текущей оценке ровно в ориентир"
+        nutrition_line += (
             f"\n📐 КБЖУ по распознанным записям: {nutrition['calories_kcal']} ккал"
             f" · Б {nutrition['protein_g']:g} · Ж {nutrition['fat_g']:g} · У {nutrition['carbs_g']:g}"
-            f" ({nutrition['count']} шт.)"
+            f" ({nutrition['count']} шт.){delta_text}"
         )
 
     chapter = "Руины" if day <= 7 else ({2: "Лес", 3: "Таррен", 4: "Шпиль"}.get(((day - 1) // 7) + 1, "История"))
@@ -139,10 +153,11 @@ async def today(message: Message) -> None:
             f"💪 Сила: {profile.strength} · 🜂 Воля: {profile.willpower}\n"
             f"💬 Селин: {relation}\n"
             f"🦊 Тори: {profile.tori_bond} · {tori_relation}\n"
-            f"{ai_line}\n\n"
+            f"{ai_line}\n"
+            f"{challenge_line}\n\n"
             f"🎯 Текущая сюжетная задача:\n{objective}\n\n"
             f"Сегодня:\n"
-            f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks}\n"
+            f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks} · 🍰 Вкусняшки: {treats}\n"
             f"☕ Напитки: {stat.drinks} · ⚡ Энергетики: {stat.energy_drinks}\n"
             f"💧 Вода: {stat.water} · 🚶 Шаги: {stat.steps:,}{nutrition_line}\n"
             f"🏋️ Тренировки за неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
@@ -220,6 +235,28 @@ async def snack(callback: CallbackQuery) -> None:
         await apply_reward(session, profile, event_type="snack", payload={"count_today": count})
         await session.commit()
     await send_reaction(callback.message, "tori", "judging" if count >= 3 else "curious", snack_reaction(count))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "food:treat")
+async def treat(callback: CallbackQuery) -> None:
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        stat = await get_or_create_daily(session, profile.id, now_local().date())
+        stat.snacks += 1
+        await apply_reward(
+            session,
+            profile,
+            event_type="treat_logged",
+            payload={"source": "manual", "count_today": stat.snacks},
+        )
+        await session.commit()
+    await send_reaction(
+        callback.message,
+        "selin",
+        "neutral",
+        "— Записала как вкусняшку. Никаких штрафов; просто челленджи и вечерний разбор теперь видят её отдельно.",
+    )
     await callback.answer()
 
 

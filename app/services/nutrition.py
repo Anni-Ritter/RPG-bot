@@ -172,6 +172,7 @@ async def daily_nutrition_totals(session: AsyncSession, user_id: int, day: date)
     row = (
         await session.execute(
             select(
+                func.count(FoodNutritionLog.id),
                 func.count(FoodNutritionLog.calories_kcal),
                 func.sum(FoodNutritionLog.calories_kcal),
                 func.sum(FoodNutritionLog.protein_g),
@@ -183,11 +184,56 @@ async def daily_nutrition_totals(session: AsyncSession, user_id: int, day: date)
             )
         )
     ).one()
-    count, kcal, protein, fat, carbs = row
+    entry_count, count, kcal, protein, fat, carbs = row
+    photo_estimate_count = await session.scalar(
+        select(func.count(FoodNutritionLog.id)).where(
+            FoodNutritionLog.user_id == user_id,
+            FoodNutritionLog.logged_on == day,
+            FoodNutritionLog.nutrition_source == "photo_estimate",
+        )
+    )
+    low_confidence_count = await session.scalar(
+        select(func.count(FoodNutritionLog.id)).where(
+            FoodNutritionLog.user_id == user_id,
+            FoodNutritionLog.logged_on == day,
+            FoodNutritionLog.confidence == "low",
+        )
+    )
     return {
+        "entry_count": int(entry_count or 0),
         "count": int(count or 0),
+        "photo_estimate_count": int(photo_estimate_count or 0),
+        "low_confidence_count": int(low_confidence_count or 0),
         "calories_kcal": int(round(float(kcal or 0))),
         "protein_g": round(float(protein or 0), 1),
         "fat_g": round(float(fat or 0), 1),
         "carbs_g": round(float(carbs or 0), 1),
     }
+
+
+async def daily_nutrition_entries(session: AsyncSession, user_id: int, day: date) -> list[FoodNutritionLog]:
+    return list(
+        (
+            await session.scalars(
+                select(FoodNutritionLog)
+                .where(
+                    FoodNutritionLog.user_id == user_id,
+                    FoodNutritionLog.logged_on == day,
+                )
+                .order_by(FoodNutritionLog.id)
+            )
+        ).all()
+    )
+
+
+async def daily_protein_meal_count(session: AsyncSession, user_id: int, day: date, threshold_g: float = 20.0) -> int:
+    count = await session.scalar(
+        select(func.count(FoodNutritionLog.id)).where(
+            FoodNutritionLog.user_id == user_id,
+            FoodNutritionLog.logged_on == day,
+            FoodNutritionLog.category == "meal",
+            FoodNutritionLog.protein_g.is_not(None),
+            FoodNutritionLog.protein_g >= threshold_g,
+        )
+    )
+    return int(count or 0)

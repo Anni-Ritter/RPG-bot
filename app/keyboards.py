@@ -8,7 +8,8 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="🏋️ Тренировка")],
             [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
             [KeyboardButton(text="📖 История"), KeyboardButton(text="💬 Селин")],
-            [KeyboardButton(text="📷 Анализ фото"), KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="📷 Анализ фото"), KeyboardButton(text="🎯 Челлендж")],
+            [KeyboardButton(text="🏆 Ачивки")],
         ],
         resize_keyboard=True,
     )
@@ -54,10 +55,13 @@ def food_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🍎 Перекус", callback_data="food:snack"),
             ],
             [
+                InlineKeyboardButton(text="🍰 Вкусняшка", callback_data="food:treat"),
                 InlineKeyboardButton(text="☕ Напиток", callback_data="food:drink"),
-                InlineKeyboardButton(text="💧 Вода", callback_data="food:water"),
             ],
-            [InlineKeyboardButton(text="🍰 Искушение", callback_data="food:temptation")],
+            [
+                InlineKeyboardButton(text="💧 Вода", callback_data="food:water"),
+                InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation"),
+            ],
         ]
     )
 
@@ -295,15 +299,44 @@ def photo_kind_menu() -> InlineKeyboardMarkup:
     )
 
 
-def food_photo_prepare_menu(has_second_photo: bool = False) -> InlineKeyboardMarkup:
+def food_photo_prepare_menu(photo_count: int = 1, *, has_comment: bool = False, max_photos: int = 8) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="🔎 Посчитать", callback_data="photoai:food:analyze")],
+        [InlineKeyboardButton(text=f"🔎 Посчитать ({photo_count} фото)", callback_data="photoai:food:analyze")],
     ]
-    if not has_second_photo:
-        rows.append([InlineKeyboardButton(text="📷 Добавить второе фото", callback_data="photoai:food:add_photo")])
+    if photo_count < max_photos:
+        rows.append([InlineKeyboardButton(text=f"📷 Добавить фото ({photo_count}/{max_photos})", callback_data="photoai:food:add_photo")])
+    rows.append([
+        InlineKeyboardButton(
+            text="✏️ Изменить комментарий" if has_comment else "💬 Добавить комментарий",
+            callback_data="photoai:food:comment",
+        )
+    ])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="photoai:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+def daily_challenge_options_menu(plan_id: int, options: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for index, option in enumerate(options[:3]):
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{index + 1}. {str(option.get('title') or 'Челлендж')[:48]}",
+                callback_data=f"challenge:select:{plan_id}:{index}",
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def daily_challenge_active_menu(plan_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="✅ Проверить челлендж", callback_data=f"challenge:check:{plan_id}")]]
+    )
+
+
+def daily_challenge_open_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🎯 Выбрать челлендж", callback_data="challenge:open")]]
+    )
 
 def food_analysis_menu(analysis_id: int, *, can_enter_grams: bool = False) -> InlineKeyboardMarkup:
     rows = [
@@ -329,6 +362,7 @@ def food_category_menu(analysis_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🍲 Полноценная еда", callback_data=f"photoai:foodcat:meal:{analysis_id}")],
             [InlineKeyboardButton(text="🍎 Перекус", callback_data=f"photoai:foodcat:snack:{analysis_id}")],
+            [InlineKeyboardButton(text="🍰 Вкусняшка", callback_data=f"photoai:foodcat:treat:{analysis_id}")],
             [InlineKeyboardButton(text="☕ Напиток", callback_data=f"photoai:foodcat:drink:{analysis_id}")],
             [InlineKeyboardButton(text="❌ Не записывать", callback_data=f"photoai:discard:{analysis_id}")],
         ]

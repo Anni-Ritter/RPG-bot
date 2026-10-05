@@ -206,11 +206,38 @@ def tori_bond_label(bond: int) -> str:
 
 def next_sync_unlock(level: int) -> str:
     return {
-        1: "уровень 2 — откроются 💬 разговоры с Селин",
-        2: "уровень 3 — Печать станет стабильнее в сложных сценах",
-        3: "уровень 4 — откроются более личные разговоры",
+        1: "уровень 2 — Печать станет заметно стабильнее",
+        2: "уровень 3 — появятся новые варианты в сложных сценах",
+        3: "уровень 4 — откроются более личные реакции Селин",
         4: "уровень 5 — появятся новые варианты использования Печати",
     }.get(level, "следующие уровни продолжают усиливать связь")
+
+
+def selin_chat_gate(profile: UserProfile, progress: StoryProgress, today: date) -> tuple[bool, str]:
+    """Story-driven access to free chat.
+
+    Conversation itself is unlimited. It can only become unavailable when the
+    current scene physically disrupts the connection.
+    """
+    if not week1_active(progress, today):
+        return True, ""
+
+    day = story_day(progress, today)
+    phase = week1_phase(progress)
+    if day == 1:
+        if phase == "intro":
+            return False, "Сначала открой 📖 История и познакомься с Селин."
+        if phase == "objective" and not objective_ready(profile, progress, day):
+            return False, (
+                "Печать пока не держит связь достаточно стабильно для обычного разговора. "
+                + objective_progress_text(profile, progress, day)
+            )
+    if day == 3 and phase == "objective" and not objective_ready(profile, progress, day):
+        return False, (
+            "Печать сейчас рвёт связь почти сразу. Сначала добей второй уровень синхронизации. "
+            + objective_progress_text(profile, progress, day)
+        )
+    return True, ""
 
 
 def begin_objective(progress: StoryProgress, profile: UserProfile, day: int) -> None:

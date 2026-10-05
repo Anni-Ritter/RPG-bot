@@ -44,8 +44,12 @@ TZ = ZoneInfo(settings.timezone)
 class PhotoAnalyzeState(StatesGroup):
     waiting_photo = State()
     waiting_kind = State()
-    waiting_second_food_photo = State()
+    waiting_more_food_photo = State()
+    waiting_food_comment = State()
     waiting_food_grams = State()
+
+
+MAX_FOOD_PHOTOS = 8
 
 
 def now_local() -> datetime:
@@ -82,6 +86,7 @@ def _food_result_text(result: dict) -> str:
     category_labels = {
         "meal": "полноценная еда",
         "snack": "перекус",
+        "treat": "вкусняшка",
         "drink": "напиток",
         "unknown": "неясно",
     }
@@ -89,9 +94,13 @@ def _food_result_text(result: dict) -> str:
         f"Похоже на: {result.get('summary', 'не получилось уверенно определить')}",
         f"Что вижу: {items}",
         f"Категория: {category_labels.get(result.get('category'), 'неясно')}",
+    ]
+    if result.get("user_comment"):
+        lines.append(f"Учла комментарий: {result['user_comment']}")
+    lines.extend([
         "",
         f"Источник КБЖУ: {_nutrition_source_label(str(result.get('nutrition_source') or 'none'))}",
-    ]
+    ])
 
     kcal = result.get("calories_kcal")
     protein = result.get("protein_g")
@@ -164,15 +173,18 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
         await state.clear()
         return
 
-    await message.answer("Смотрю изображение…" if len(file_ids) == 1 else "Смотрю оба изображения…")
+    count = min(len(file_ids), MAX_FOOD_PHOTOS if kind == "food" else 1)
+    await message.answer("Смотрю изображение…" if count == 1 else f"Смотрю изображения: {count} шт.…")
     try:
         images: list[tuple[bytes, str]] = []
-        for index, file_id in enumerate(file_ids[:2]):
+        for index, file_id in enumerate(file_ids[:count]):
             mime = mime_types[index] if index < len(mime_types) else "image/jpeg"
             images.append((await _download_telegram_photo(message.bot, file_id), mime))
 
         if kind == "food":
-            result = normalize_food_result(await analyze_food_images(images))
+            comment = str(data.get("food_comment") or "").strip()
+            result = normalize_food_result(await analyze_food_images(images, user_comment=comment))
+            result["user_comment"] = comment
         else:
             result = await analyze_activity_image(images[0][0], images[0][1])
     except Exception as exc:
@@ -187,7 +199,7 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
             user_id=profile.id,
             analysis_type=kind,
             telegram_file_id=file_ids[0],
-            result={**result, "image_count": len(file_ids)},
+            result={**result, "image_count": count},
             status="pending",
         )
         session.add(row)
@@ -237,7 +249,7 @@ async def photo_analysis_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(PhotoAnalyzeState.waiting_photo)
     await message.answer(
-        "Пришли фото еды или скрин из часов / Google Fit. Для еды потом можно добавить второе фото — например этикетку с КБЖУ.",
+        f"Пришли фото еды или скрин из часов / Google Fit. Для еды можно собрать до {MAX_FOOD_PHOTOS} фото: само блюдо, ингредиенты и этикетки с КБЖУ.",
         reply_markup=back_menu("photoai:cancel", "❌ Отмена"),
     )
 
@@ -245,30 +257,84 @@ async def photo_analysis_start(message: Message, state: FSMContext) -> None:
 @router.message(PhotoAnalyzeState.waiting_photo, F.photo)
 async def photo_received_after_prompt(message: Message, state: FSMContext) -> None:
     photo = message.photo[-1]
-    await state.update_data(photo_file_ids=[photo.file_id], photo_mimes=["image/jpeg"])
+    await state.update_data(
+        photo_file_ids=[photo.file_id],
+        photo_mimes=["image/jpeg"],
+        food_comment=(message.caption or "").strip(),
+    )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
     await message.answer("Что на изображении?", reply_markup=photo_kind_menu())
 
 
-@router.message(PhotoAnalyzeState.waiting_second_food_photo, F.photo)
-async def second_food_photo_received(message: Message, state: FSMContext) -> None:
+@router.message(PhotoAnalyzeState.waiting_more_food_photo, F.photo)
+async def more_food_photo_received(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     file_ids = list(data.get("photo_file_ids") or [])
     mime_types = list(data.get("photo_mimes") or [])
-    if not file_ids:
-        file_ids = [message.photo[-1].file_id]
-        mime_types = ["image/jpeg"]
-    elif len(file_ids) < 2:
-        file_ids.append(message.photo[-1].file_id)
-        mime_types.append("image/jpeg")
-    else:
-        file_ids[1] = message.photo[-1].file_id
-        mime_types[1] = "image/jpeg"
-    await state.update_data(photo_file_ids=file_ids, photo_mimes=mime_types, selected_kind="food")
+    if len(file_ids) >= MAX_FOOD_PHOTOS:
+        await state.set_state(PhotoAnalyzeState.waiting_kind)
+        await message.answer(
+            f"Уже собрано {MAX_FOOD_PHOTOS} фото — этого хватит даже для очень сложной лепёшки.",
+            reply_markup=food_photo_prepare_menu(
+                len(file_ids),
+                has_comment=bool(str(data.get("food_comment") or "").strip()),
+                max_photos=MAX_FOOD_PHOTOS,
+            ),
+        )
+        return
+
+    file_ids.append(message.photo[-1].file_id)
+    mime_types.append("image/jpeg")
+    comment = str(data.get("food_comment") or "").strip()
+    caption = (message.caption or "").strip()
+    if caption:
+        comment = f"{comment}\n{caption}".strip()
+    await state.update_data(
+        photo_file_ids=file_ids,
+        photo_mimes=mime_types,
+        selected_kind="food",
+        food_comment=comment,
+    )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
     await message.answer(
-        "Добавила второе фото. Теперь могу объединить блюдо и этикетку в один расчёт.",
-        reply_markup=food_photo_prepare_menu(has_second_photo=True),
+        f"Добавила фото. Сейчас в расчёте: {len(file_ids)}.",
+        reply_markup=food_photo_prepare_menu(
+            len(file_ids),
+            has_comment=bool(comment),
+            max_photos=MAX_FOOD_PHOTOS,
+        ),
+    )
+
+
+@router.message(PhotoAnalyzeState.waiting_food_comment, F.text)
+async def food_comment_received(message: Message, state: FSMContext) -> None:
+    comment = (message.text or "").strip()
+    if not comment:
+        await message.answer("Напиши комментарий текстом.")
+        return
+    data = await state.get_data()
+    await state.update_data(food_comment=comment, selected_kind="food")
+    await state.set_state(PhotoAnalyzeState.waiting_kind)
+    count = len(data.get("photo_file_ids") or [])
+    await message.answer(
+        "Комментарий сохранила. Он будет важнее моих догадок по фото.",
+        reply_markup=food_photo_prepare_menu(count, has_comment=True, max_photos=MAX_FOOD_PHOTOS),
+    )
+
+
+@router.message(PhotoAnalyzeState.waiting_kind, F.text)
+async def food_comment_without_button(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("selected_kind") != "food":
+        return
+    comment = (message.text or "").strip()
+    if not comment:
+        return
+    await state.update_data(food_comment=comment)
+    count = len(data.get("photo_file_ids") or [])
+    await message.answer(
+        "Приняла это как комментарий к еде.",
+        reply_markup=food_photo_prepare_menu(count, has_comment=True, max_photos=MAX_FOOD_PHOTOS),
     )
 
 
@@ -278,8 +344,46 @@ async def unsolicited_photo(message: Message, state: FSMContext) -> None:
     # image-upload FSM has first chance to consume generated outfit art.
     if not ai_enabled():
         return
+
+    current_state = await state.get_state()
+    data = await state.get_data()
+    existing = list(data.get("photo_file_ids") or [])
+
+    # Telegram albums arrive as several independent photo updates. If the user
+    # sends an album while we are already preparing an analysis, keep appending
+    # instead of replacing the previous image. This also makes the repeated
+    # "Добавить фото" flow tolerant of sending several images at once.
+    if current_state == PhotoAnalyzeState.waiting_kind.state and existing:
+        if len(existing) >= MAX_FOOD_PHOTOS:
+            await message.answer(f"Уже собрано {MAX_FOOD_PHOTOS} фото — больше в один анализ не беру.")
+            return
+        mimes = list(data.get("photo_mimes") or [])
+        existing.append(message.photo[-1].file_id)
+        mimes.append("image/jpeg")
+        comment = str(data.get("food_comment") or "").strip()
+        caption = (message.caption or "").strip()
+        if caption:
+            comment = f"{comment}\n{caption}".strip()
+        await state.update_data(photo_file_ids=existing, photo_mimes=mimes, food_comment=comment)
+        selected_kind = data.get("selected_kind")
+        if selected_kind == "food":
+            markup = food_photo_prepare_menu(
+                len(existing), has_comment=bool(comment), max_photos=MAX_FOOD_PHOTOS
+            )
+            await message.answer(f"Добавила ещё фото. Сейчас в расчёте: {len(existing)}.", reply_markup=markup)
+        else:
+            await message.answer(
+                f"Добавила ещё фото ({len(existing)}). Если это еда — проанализирую их вместе.",
+                reply_markup=photo_kind_menu(),
+            )
+        return
+
     photo = message.photo[-1]
-    await state.update_data(photo_file_ids=[photo.file_id], photo_mimes=["image/jpeg"])
+    await state.update_data(
+        photo_file_ids=[photo.file_id],
+        photo_mimes=["image/jpeg"],
+        food_comment=(message.caption or "").strip(),
+    )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
     await message.answer("Хочешь, чтобы я распознала это фото?", reply_markup=photo_kind_menu())
 
@@ -307,9 +411,14 @@ async def choose_photo_kind(callback: CallbackQuery, state: FSMContext) -> None:
     if kind == "food":
         await state.update_data(selected_kind="food")
         await state.set_state(PhotoAnalyzeState.waiting_kind)
+        count = len(data.get("photo_file_ids") or [])
         await callback.message.answer(
-            "Если на другом фото есть упаковка, вес или КБЖУ — добавь его до расчёта. Так будет заметно точнее.",
-            reply_markup=food_photo_prepare_menu(has_second_photo=len(data.get("photo_file_ids") or []) >= 2),
+            f"Можно добавить ещё фото упаковок/ингредиентов (до {MAX_FOOD_PHOTOS}) и комментарий: что внутри, сколько граммов, было ли масло/соус и т.д.",
+            reply_markup=food_photo_prepare_menu(
+                count,
+                has_comment=bool(str(data.get("food_comment") or "").strip()),
+                max_photos=MAX_FOOD_PHOTOS,
+            ),
         )
         return
 
@@ -317,16 +426,35 @@ async def choose_photo_kind(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "photoai:food:add_photo")
-async def add_second_food_photo(callback: CallbackQuery, state: FSMContext) -> None:
+async def add_more_food_photo(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
-    if not data.get("photo_file_ids"):
+    file_ids = list(data.get("photo_file_ids") or [])
+    if not file_ids:
         await callback.answer("Первое фото потерялось. Пришли его ещё раз.", show_alert=True)
         await state.clear()
         return
-    await state.set_state(PhotoAnalyzeState.waiting_second_food_photo)
+    if len(file_ids) >= MAX_FOOD_PHOTOS:
+        await callback.answer(f"Лимит — {MAX_FOOD_PHOTOS} фото на один расчёт.", show_alert=True)
+        return
+    await state.set_state(PhotoAnalyzeState.waiting_more_food_photo)
     await callback.answer()
     await callback.message.answer(
-        "Пришли второе фото — например упаковку или этикетку с КБЖУ и весом.",
+        f"Пришли ещё фото. Сейчас {len(file_ids)}/{MAX_FOOD_PHOTOS}. Можно прислать упаковку, этикетку или ещё один ингредиент.",
+        reply_markup=back_menu("photoai:cancel", "❌ Отмена"),
+    )
+
+
+@router.callback_query(F.data == "photoai:food:comment")
+async def add_food_comment(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("photo_file_ids"):
+        await callback.answer("Фото потерялось. Пришли его ещё раз.", show_alert=True)
+        await state.clear()
+        return
+    await state.set_state(PhotoAnalyzeState.waiting_food_comment)
+    await callback.answer()
+    await callback.message.answer(
+        "Напиши всё, что знаешь: состав, граммы, сколько чего положила, масло/соус, КБЖУ с упаковки. Можно обычным человеческим текстом.",
         reply_markup=back_menu("photoai:cancel", "❌ Отмена"),
     )
 
@@ -344,7 +472,7 @@ async def _load_pending_analysis(session, user_id: int, analysis_id: int) -> AII
     return row
 
 
-@router.callback_query(F.data.regexp(r"^photoai:food:(meal|snack|drink):\d+$"))
+@router.callback_query(F.data.regexp(r"^photoai:food:(meal|snack|treat|drink):\d+$"))
 async def legacy_accept_food_analysis(callback: CallbackQuery, state: FSMContext) -> None:
     """Keep old V7 inline buttons usable after deploying V8."""
     parts = callback.data.split(":")
@@ -386,7 +514,7 @@ async def set_food_category(callback: CallbackQuery) -> None:
         return
     category = parts[2]
     analysis_id = int(parts[3])
-    if category not in {"meal", "snack", "drink"}:
+    if category not in {"meal", "snack", "treat", "drink"}:
         return
 
     async with SessionLocal() as session:
@@ -430,7 +558,7 @@ async def _record_food_choice(
             return "Это распознавание уже закрыто."
         result = normalize_food_result(row.result or {})
         category = result.get("category")
-        if category not in {"meal", "snack", "drink"}:
+        if category not in {"meal", "snack", "treat", "drink"}:
             return "Сначала нужно уточнить категорию."
 
         stat = await get_or_create_daily(session, profile.id, today)
@@ -465,6 +593,9 @@ async def _record_food_choice(
         elif category == "snack":
             stat.snacks += 1
             await apply_reward(session, profile, event_type="snack_ai", payload=payload)
+        elif category == "treat":
+            stat.snacks += 1
+            await apply_reward(session, profile, event_type="treat_logged", payload=payload)
         else:
             stat.drinks += 1
             drink_kind = result.get("drink_kind")
@@ -496,7 +627,7 @@ async def _record_food_choice(
         row.resolved_at = now_local()
         await session.commit()
 
-    labels = {"meal": "полноценную еду", "snack": "перекус", "drink": "напиток"}
+    labels = {"meal": "полноценную еду", "snack": "перекус", "treat": "вкусняшку", "drink": "напиток"}
     text = f"Записала как {labels[category]} · {portion_label}."
     if nutrition.get("calories_kcal") is not None:
         text += (
@@ -526,7 +657,7 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
                 await callback.answer("Это распознавание уже закрыто.", show_alert=True)
                 return
             result = normalize_food_result(row.result or {})
-            if result.get("category") not in {"meal", "snack", "drink"}:
+            if result.get("category") not in {"meal", "snack", "treat", "drink"}:
                 await callback.answer()
                 await callback.message.answer("Сначала уточни категорию.", reply_markup=food_category_menu(analysis_id))
                 return
@@ -554,7 +685,7 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
             await callback.answer("Это распознавание уже закрыто.", show_alert=True)
             return
         result = row.result or {}
-        if result.get("category") not in {"meal", "snack", "drink"}:
+        if result.get("category") not in {"meal", "snack", "treat", "drink"}:
             await callback.answer()
             await callback.message.answer("Сначала уточни категорию.", reply_markup=food_category_menu(analysis_id))
             return

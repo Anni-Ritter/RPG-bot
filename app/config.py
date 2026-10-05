@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
     openai_api_key: str | None = None
     openai_model: str = "gpt-6-luna"
-    openai_daily_call_limit: int = 30
+    openai_daily_call_limit: int = 0
+    evening_review_hour: int = 21
+    evening_review_minute: int = 30
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -13,6 +13,7 @@ from app.db import SessionLocal
 from app.keyboards import (
     ai_initiative_menu,
     ai_quest_offer_menu,
+    daily_challenge_open_menu,
     monday_finish_menu,
     tori_autonomous_menu,
     temptation_after_pause_menu,
@@ -30,9 +31,9 @@ from app.services.ai_features import (
     get_or_create_ai_state,
     reserve_ai_call,
 )
-from app.services.levels import level_from_xp
 from app.services.dialogue import pick_dialogue, pick_tori_autonomous_event
-from app.services.story import get_or_create_story_progress, story_chapter, story_day
+from app.services.evening_review import create_evening_review
+from app.services.story import (advance_week1_if_due, get_or_create_story_progress, initialize_week1_v2, selin_chat_gate, story_chapter, story_day)
 
 
 TZ = ZoneInfo(settings.timezone)
@@ -96,6 +97,20 @@ async def ensure_day_schedule(day: date) -> None:
                 evening,
                 f"{prefix}:autonomous:evening",
                 {"period": "evening"},
+            )
+            await _ensure_notification(
+                session,
+                profile,
+                "daily_challenge_offer",
+                local_dt(day, 8, 30),
+                f"{prefix}:daily_challenge",
+            )
+            await _ensure_notification(
+                session,
+                profile,
+                "evening_nutrition_review",
+                local_dt(day, settings.evening_review_hour, settings.evening_review_minute),
+                f"{prefix}:evening_review",
             )
 
             if weekday == 0:
@@ -179,8 +194,11 @@ async def _send_selin_autonomous_event(
     profile: UserProfile,
     now: datetime,
 ) -> bool:
-    level, _, _ = level_from_xp(profile.xp)
-    if level < 2 or not ai_enabled() or not await reserve_ai_call(session, profile.id, "initiative"):
+    progress = await get_or_create_story_progress(session, profile.id, now.date())
+    initialize_week1_v2(progress, profile, now.date())
+    advance_week1_if_due(progress, now.date())
+    allowed, _ = selin_chat_gate(profile, progress, now.date())
+    if not allowed or not ai_enabled() or not await reserve_ai_call(session, profile.id, "initiative"):
         return False
 
     try:
@@ -216,7 +234,6 @@ async def _send_selin_autonomous_event(
             "period": period,
             "event_type": "selin",
             "status": "open",
-            "turns_left": 3,
             "initiative_text": text,
         }
         ai_state = await get_or_create_ai_state(session, profile)
@@ -304,8 +321,11 @@ async def send_due(bot: Bot) -> None:
                 sent_ai = False
                 profile = await session.get(UserProfile, n.user_id)
                 if profile and ai_enabled():
-                    level, _, _ = level_from_xp(profile.xp)
-                    if level >= 2 and await reserve_ai_call(session, profile.id, "initiative"):
+                    progress_for_chat = await get_or_create_story_progress(session, profile.id, now.date())
+                    initialize_week1_v2(progress_for_chat, profile, now.date())
+                    advance_week1_if_due(progress_for_chat, now.date())
+                    chat_allowed, _ = selin_chat_gate(profile, progress_for_chat, now.date())
+                    if chat_allowed and await reserve_ai_call(session, profile.id, "initiative"):
                         try:
                             context = await build_ai_context(session, profile)
                             can_offer = await can_offer_ai_quest(session, profile.id, now.date())
@@ -349,6 +369,33 @@ async def send_due(bot: Bot) -> None:
                             print("AI initiative error:", repr(exc))
                 if not sent_ai:
                     await send_reaction_to_chat(bot, telegram_id, "tori", "at_door", pick_dialogue("activity_nudge", chapter))
+
+            elif n.kind == "daily_challenge_offer":
+                await send_reaction_to_chat(
+                    bot,
+                    telegram_id,
+                    "selin",
+                    "curious",
+                    "— Новый день. Выбери один челлендж. Никаких штрафов за провал, но за выполненный я плачу нормально.",
+                    reply_markup=daily_challenge_open_menu(),
+                )
+
+            elif n.kind == "evening_nutrition_review":
+                profile = await session.get(UserProfile, n.user_id)
+                if profile:
+                    try:
+                        review, chest, _ = await create_evening_review(session, profile, now.date(), force=True, finalize_challenge=True)
+                        await session.commit()
+                        text = review.text
+                        if review.tomorrow_focus:
+                            text += f"\n\nНа завтра я бы оставила один фокус: {review.tomorrow_focus}"
+                        if chest:
+                            text += "\n\n✨ Челлендж тоже закрыт, и это третий выполненный — +1 Сундук испытания."
+                        await send_reaction_to_chat(
+                            bot, telegram_id, "selin", review.emotion or "neutral", text
+                        )
+                    except Exception as exc:
+                        print("Evening review send error:", repr(exc))
 
             elif n.kind == "monday_start":
                 await send_reaction_to_chat(
