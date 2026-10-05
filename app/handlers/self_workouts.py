@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.config import settings
 from app.db import SessionLocal
-from app.keyboards import manual_workout_duration_menu, manual_workout_type_menu
+from app.keyboards import back_menu, manual_workout_duration_menu, manual_workout_type_menu
 from app.services.achievements import achievement_messages, check_achievements
 from app.services.assets import send_background, send_reaction
 from app.services.rewards import apply_reward, get_or_create_profile
@@ -65,7 +65,10 @@ async def manual_workout_minutes(callback: CallbackQuery, state: FSMContext) -> 
     raw = callback.data.rsplit(":", 1)[1]
     if raw == "custom":
         await state.set_state(ManualWorkoutState.waiting_minutes)
-        await callback.message.answer("Введи количество минут числом, например 35.")
+        await callback.message.answer(
+            "Введи количество минут числом, например 35.",
+            reply_markup=back_menu("state:cancel", "❌ Отмена"),
+        )
         await callback.answer()
         return
 

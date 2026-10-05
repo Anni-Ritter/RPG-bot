@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.keyboards import drink_menu, food_menu, main_menu, quest_menu, temptation_menu, wardrobe_menu
+from app.keyboards import back_menu, drink_menu, food_menu, main_menu, quest_menu, temptation_menu, wardrobe_menu
 from app.models import CustomQuest, Notification, PendingTemptation, UserAchievement
 from app.services.achievements import achievement_messages, check_achievements
 from app.services.assets import send_background, send_reaction, step_reaction_emotion
@@ -49,6 +49,13 @@ class StepState(StatesGroup):
 class QuestState(StatesGroup):
     waiting_title = State()
     waiting_difficulty = State()
+
+
+@router.callback_query(F.data == "state:cancel")
+async def cancel_state(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.answer("Действие отменено.", reply_markup=main_menu())
+    await callback.answer()
 
 
 @router.message(CommandStart())
@@ -336,7 +343,12 @@ async def temptation_no_longer(callback: CallbackQuery) -> None:
 @router.message(F.text == "🚶 Шаги")
 async def ask_steps(message: Message, state: FSMContext) -> None:
     await state.set_state(StepState.waiting_steps)
-    await send_background(message, "promenade", "Сколько шагов сегодня? Введи число.")
+    await send_background(
+        message,
+        "promenade",
+        "Сколько шагов сегодня? Введи число.",
+        reply_markup=back_menu("state:cancel", "❌ Отмена"),
+    )
 
 
 @router.message(StepState.waiting_steps)
@@ -386,7 +398,10 @@ async def quests(message: Message) -> None:
 @router.callback_query(F.data == "quest:new")
 async def quest_new(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(QuestState.waiting_title)
-    await callback.message.answer("Как называется квест?")
+    await callback.message.answer(
+        "Как называется квест?",
+        reply_markup=back_menu("state:cancel", "❌ Отмена"),
+    )
     await callback.answer()
 
 
@@ -398,7 +413,10 @@ async def quest_title(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(title=title)
     await state.set_state(QuestState.waiting_difficulty)
-    await message.answer("Сложность: лёгкий / обычный / сложный")
+    await message.answer(
+        "Сложность: лёгкий / обычный / сложный",
+        reply_markup=back_menu("state:cancel", "❌ Отмена"),
+    )
 
 
 @router.message(QuestState.waiting_difficulty)
