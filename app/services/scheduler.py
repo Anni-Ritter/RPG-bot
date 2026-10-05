@@ -175,6 +175,16 @@ async def send_due(bot: Bot) -> None:
                         reply_markup=temptation_after_pause_menu(pending.id),
                     )
 
+            elif n.kind == "story_checkpoint":
+                payload = n.payload or {}
+                await send_reaction_to_chat(
+                    bot,
+                    telegram_id,
+                    str(payload.get("character", "selin")),
+                    str(payload.get("emotion", "neutral")),
+                    str(payload.get("text", "В Истории появилось продолжение.")),
+                )
+
             n.sent_at = now
 
         await session.commit()

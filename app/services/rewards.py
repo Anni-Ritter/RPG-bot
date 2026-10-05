@@ -54,6 +54,13 @@ async def apply_reward(
     profile.willpower += willpower
     profile.atelier_dust += atelier_dust
 
+    event_payload = {
+        **(payload or {}),
+        "tori_bond_delta": bond,
+        "strength_delta": strength,
+        "willpower_delta": willpower,
+    }
+
     session.add(
         GameEvent(
             user_id=profile.id,
@@ -61,11 +68,14 @@ async def apply_reward(
             xp_delta=xp,
             coins_delta=coins,
             atelier_dust_delta=atelier_dust,
-            payload={
-                **(payload or {}),
-                "tori_bond_delta": bond,
-                "strength_delta": strength,
-                "willpower_delta": willpower,
-            },
+            payload=event_payload,
         )
+    )
+
+    # Story V2 reacts to real actions. Import lazily to keep the reward service
+    # reusable and avoid an import cycle during application startup.
+    from app.services.story import queue_story_checkpoint_if_ready
+
+    await queue_story_checkpoint_if_ready(
+        session, profile, event_type=event_type, payload=event_payload
     )

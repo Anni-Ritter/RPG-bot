@@ -7,11 +7,11 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="📊 Сегодня"), KeyboardButton(text="🚶 Шаги")],
             [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="🏋️ Тренировка")],
             [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
-            [KeyboardButton(text="📖 История"), KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="📖 История"), KeyboardButton(text="💬 Селин")],
+            [KeyboardButton(text="🏆 Ачивки")],
         ],
         resize_keyboard=True,
     )
-
 
 
 def manual_workout_type_menu() -> InlineKeyboardMarkup:
@@ -44,6 +44,7 @@ def manual_workout_duration_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⌨️ Ввести минуты", callback_data="manualworkout:minutes:custom")],
         ]
     )
+
 
 def food_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -204,12 +205,30 @@ def story_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup | 
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=choice["label"],
-                    callback_data=f"storychoice:{day}:{choice['id']}",
-                )
-            ]
+            [InlineKeyboardButton(text=choice["label"], callback_data=f"storychoice:{day}:{choice['id']}")]
             for choice in choices
         ]
     )
+
+
+def story_v2_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup | None:
+    if not choices:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=choice["label"], callback_data=f"storyv2:{day}:{choice['id']}")]
+            for choice in choices
+        ]
+    )
+
+
+def selin_chat_menu(include_tori: bool = True) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="О тебе", callback_data="selinchat:self")],
+        [InlineKeyboardButton(text="О Печати", callback_data="selinchat:seal")],
+        [InlineKeyboardButton(text="Как ты?", callback_data="selinchat:how")],
+    ]
+    if include_tori:
+        rows.append([InlineKeyboardButton(text="О Тори", callback_data="selinchat:tori")])
+    rows.append([InlineKeyboardButton(text="Просто посидеть рядом", callback_data="selinchat:sit")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

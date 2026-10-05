@@ -5,12 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ScrollDefinition, ScrollInventory, UserProfile
 
-DUPLICATE_DUST = {
-    "common": 10,
-    "rare": 25,
-    "epic": 60,
-    "legendary": 150,
-}
 
 SCROLL_TARGET_LABELS = {
     "outfit": "Селин",
@@ -27,12 +21,19 @@ SCROLL_TYPE_LABELS = {
 }
 
 
-def get_scroll_target(scroll) -> str:
+def get_scroll_target(scroll: ScrollDefinition) -> str:
     return SCROLL_TARGET_LABELS.get(scroll.item_type, "Неизвестно")
 
 
-def get_scroll_type_label(scroll) -> str:
+def get_scroll_type_label(scroll: ScrollDefinition) -> str:
     return SCROLL_TYPE_LABELS.get(scroll.item_type, scroll.item_type)
+
+DUPLICATE_DUST = {
+    "common": 10,
+    "rare": 25,
+    "epic": 60,
+    "legendary": 150,
+}
 
 
 async def grant_scroll(

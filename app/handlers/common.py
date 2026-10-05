@@ -28,7 +28,11 @@ from app.services.phrases import (
 from app.services.rewards import apply_reward, get_or_create_daily, get_or_create_profile
 from app.services.steps import evaluate_steps
 from app.services.self_workouts import weekly_workout_summary
-from app.services.story import get_or_create_story_progress
+from app.services.story import (
+    advance_week1_if_due, affinity_label, current_story_objective,
+    get_or_create_story_progress, initialize_week1_v2, next_sync_unlock,
+    story_day, tori_bond_label,
+)
 
 router = Router()
 TZ = ZoneInfo(settings.timezone)
@@ -54,45 +58,64 @@ async def start(message: Message) -> None:
         profile = await get_or_create_profile(
             session, message.from_user.id, message.from_user.full_name if message.from_user else None
         )
-        await get_or_create_story_progress(session, profile.id, today)
+        progress = await get_or_create_story_progress(session, profile.id, today)
+        initialize_week1_v2(progress, profile, today)
+        advance_week1_if_due(progress, today)
         await session.commit()
     await send_background(
         message,
         "atelier_default",
-        "Селин посмотрела в твою сторону. Тори устроился рядом.\n\nСвязь установлена. История начинается сегодня.",
+        "Связь с Селин активна. Теперь развитие персонажа связано с сюжетом: XP усиливает синхронизацию, характеристики открывают варианты, а отношения — новые разговоры.\n\nНачни с 📖 История.",
         reply_markup=main_menu(),
     )
 
 
 @router.message(F.text == "📊 Сегодня")
 async def today(message: Message) -> None:
+    today_date = now_local().date()
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
-        stat = await get_or_create_daily(session, profile.id, now_local().date())
-        workout_week = await weekly_workout_summary(session, profile.id, now_local().date())
+        stat = await get_or_create_daily(session, profile.id, today_date)
+        progress = await get_or_create_story_progress(session, profile.id, today_date)
+        initialize_week1_v2(progress, profile, today_date)
+        advance_week1_if_due(progress, today_date)
+        workout_week = await weekly_workout_summary(session, profile.id, today_date)
+        level, current_threshold, next_threshold = level_from_xp(profile.xp)
+        day = story_day(progress, today_date)
+        objective = current_story_objective(profile, progress, today_date)
+        relation = affinity_label(progress)
+        tori_relation = tori_bond_label(profile.tori_bond)
         await session.commit()
-        level, _, next_threshold = level_from_xp(profile.xp)
-        next_text = str(next_threshold) if next_threshold is not None else "MAX"
-        await send_background(
-            message, "atelier_default",
-            (
-                f"Селин — уровень {level}\n"
-                f"XP: {profile.xp} / {next_text}\n"
-                f"Монеты: {profile.coins}\n"
-                f"Сила: {profile.strength} · Воля: {profile.willpower}\n"
-                f"Связь с Тори: {profile.tori_bond}\n"
-                f"Пыль ателье: {profile.atelier_dust}\n"
-                f"Сундуки: {profile.trial_chests}\n\n"
-                f"Сегодня:\n"
-                f"🍲 Еда: {stat.meals}\n🍎 Перекусы: {stat.snacks}\n"
-                f"☕ Напитки: {stat.drinks} (без добавок {stat.plain_drinks} · калорийные {stat.caloric_drinks})\n"
-                f"⚡ Энергетики: {stat.energy_drinks}\n"
-                f"💧 Вода: {stat.water}\n🚶 Шаги: {stat.steps:,}\n\n"
-                f"🏋️ Тренировки за неделю: {workout_week['count']}\n"
-                f"⏱ Времени: {workout_week['minutes']} мин\n"
-                f"Дополнительные: {workout_week['manual_count']} · зал: {workout_week['scheduled_count']}"
-            ).replace(",", " ")
-        )
+
+    if next_threshold is None:
+        sync_line = f"Уровень {level} · {profile.xp} XP"
+        to_next = "MAX"
+    else:
+        sync_line = f"Уровень {level} · {profile.xp} / {next_threshold} XP"
+        to_next = f"До следующего уровня: {max(0, next_threshold - profile.xp)} XP"
+
+    chapter = "Руины" if day <= 7 else ({2: "Лес", 3: "Таррен", 4: "Шпиль"}.get(((day - 1) // 7) + 1, "История"))
+    await send_background(
+        message,
+        "atelier_default",
+        (
+            f"Глава · {chapter}\n"
+            f"День сюжета: {day}/28\n\n"
+            f"✦ Синхронизация с Селин: {sync_line}\n"
+            f"{to_next}\n"
+            f"Следующее открытие: {next_sync_unlock(level)}\n\n"
+            f"💪 Сила: {profile.strength} · 🜂 Воля: {profile.willpower}\n"
+            f"💬 Селин: {relation}\n"
+            f"🦊 Тори: {profile.tori_bond} · {tori_relation}\n\n"
+            f"🎯 Текущая сюжетная задача:\n{objective}\n\n"
+            f"Сегодня:\n"
+            f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks}\n"
+            f"☕ Напитки: {stat.drinks} · ⚡ Энергетики: {stat.energy_drinks}\n"
+            f"💧 Вода: {stat.water} · 🚶 Шаги: {stat.steps:,}\n"
+            f"🏋️ Тренировки за неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
+            f"Ателье: {profile.coins} монет · {profile.atelier_dust} Пыли · {profile.trial_chests} сундуков"
+        ).replace(",", " "),
+    )
 
 
 @router.message(F.text == "🏆 Ачивки")

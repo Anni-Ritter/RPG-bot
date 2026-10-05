@@ -1,13 +1,13 @@
 import json
-from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ScrollDefinition
+from app.services.content import game_data_path
 
 
 async def seed_scrolls(session: AsyncSession) -> None:
-    path = Path(__file__).resolve().parent.parent / "game_data" / "scrolls.json"
+    path = game_data_path("scrolls.json")
     data = json.loads(path.read_text(encoding="utf-8"))
 
     for row in data:

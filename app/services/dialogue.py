@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import random
-from pathlib import Path
 
-DIALOGUE_PATH = Path(__file__).resolve().parent.parent / "game_data" / "dialogue.json"
+from app.services.content import game_data_path
+
+DIALOGUE_PATH = game_data_path("dialogue.json")
 _DATA = json.loads(DIALOGUE_PATH.read_text(encoding="utf-8"))
 
 
