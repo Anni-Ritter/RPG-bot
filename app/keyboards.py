@@ -250,6 +250,41 @@ def ai_quest_offer_menu(offer_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def ai_initiative_menu(notification_id: int, offer_id: int | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="💬 Ответить", callback_data=f"initiative:reply:{notification_id}")],
+        [InlineKeyboardButton(text="Позже", callback_data=f"initiative:later:{notification_id}")],
+    ]
+    if offer_id is not None:
+        rows.insert(
+            0,
+            [InlineKeyboardButton(text="📜 Взять задание", callback_data=f"aiquest:accept:{offer_id}")],
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ai_initiative_stop_menu(notification_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛑 Закончить разговор", callback_data=f"initiative:stop:{notification_id}")]
+        ]
+    )
+
+
+def tori_autonomous_menu(notification_id: int, choices: list[dict]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=str(choice["label"]),
+                    callback_data=f"toriauto:react:{notification_id}:{choice['id']}",
+                )
+            ]
+            for choice in choices
+        ]
+    )
+
+
 def photo_kind_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

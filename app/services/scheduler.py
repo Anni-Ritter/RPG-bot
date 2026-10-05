@@ -11,8 +11,10 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import (
+    ai_initiative_menu,
     ai_quest_offer_menu,
     monday_finish_menu,
+    tori_autonomous_menu,
     temptation_after_pause_menu,
     thursday_second_menu,
     workout_start_menu,
@@ -21,6 +23,7 @@ from app.models import Notification, PendingTemptation, UserProfile, WorkoutSess
 from app.services.assets import send_reaction_to_chat
 from app.services.ai_engine import ai_enabled, generate_selin_initiative
 from app.services.ai_features import (
+    append_recent_message,
     build_ai_context,
     can_offer_ai_quest,
     create_ai_quest_offer,
@@ -28,7 +31,7 @@ from app.services.ai_features import (
     reserve_ai_call,
 )
 from app.services.levels import level_from_xp
-from app.services.dialogue import pick_dialogue
+from app.services.dialogue import pick_dialogue, pick_tori_autonomous_event
 from app.services.story import get_or_create_story_progress, story_chapter, story_day
 
 
@@ -46,7 +49,14 @@ def random_dt(day: date, start_h: int, start_m: int, end_h: int, end_m: int) -> 
     return local_dt(day, minute_of_day // 60, minute_of_day % 60)
 
 
-async def _ensure_notification(session, profile: UserProfile, kind: str, scheduled_at: datetime, key: str) -> None:
+async def _ensure_notification(
+    session,
+    profile: UserProfile,
+    kind: str,
+    scheduled_at: datetime,
+    key: str,
+    payload: dict | None = None,
+) -> None:
     exists = await session.scalar(select(Notification.id).where(Notification.dedupe_key == key))
     if exists:
         return
@@ -56,6 +66,7 @@ async def _ensure_notification(session, profile: UserProfile, kind: str, schedul
             kind=kind,
             scheduled_at=scheduled_at,
             dedupe_key=key,
+            payload=payload or {},
         )
     )
 
@@ -67,6 +78,25 @@ async def ensure_day_schedule(day: date) -> None:
 
         for profile in profiles:
             prefix = f"{profile.id}:{day.isoformat()}"
+
+            daytime = random_dt(day, 8, 0, 15, 0)
+            evening = random_dt(day, 15, 1, 23, 0)
+            await _ensure_notification(
+                session,
+                profile,
+                "autonomous_event",
+                daytime,
+                f"{prefix}:autonomous:day",
+                {"period": "day"},
+            )
+            await _ensure_notification(
+                session,
+                profile,
+                "autonomous_event",
+                evening,
+                f"{prefix}:autonomous:evening",
+                {"period": "evening"},
+            )
 
             if weekday == 0:
                 await _ensure_notification(
@@ -82,15 +112,6 @@ async def ensure_day_schedule(day: date) -> None:
                 await _ensure_notification(
                     session, profile, "thursday_second", local_dt(day, 19, 15), f"{prefix}:thursday_second"
                 )
-            elif weekday == 1:
-                at = random_dt(day, 17, 30, 20, 30)
-                await _ensure_notification(session, profile, "activity_nudge", at, f"{prefix}:activity_nudge")
-            elif weekday in {2, 4}:
-                at = random_dt(day, 12, 0, 19, 0)
-                await _ensure_notification(session, profile, "activity_nudge", at, f"{prefix}:activity_nudge")
-            elif weekday in {5, 6}:
-                at = random_dt(day, 15, 0, 20, 30)
-                await _ensure_notification(session, profile, "activity_nudge", at, f"{prefix}:activity_nudge")
 
         await session.commit()
 
@@ -104,6 +125,129 @@ async def ensure_schedule() -> None:
 async def _get_profile_telegram_id(session, user_id: int) -> int:
     profile = await session.get(UserProfile, user_id)
     return profile.telegram_id
+
+
+async def _send_tori_autonomous_event(
+    session,
+    notification: Notification,
+    bot: Bot,
+    telegram_id: int,
+    chapter: int,
+) -> None:
+    period = str((notification.payload or {}).get("period") or "day")
+    event = pick_tori_autonomous_event(chapter, period)
+    notification.payload = {
+        "period": period,
+        "event_type": "tori",
+        "event_id": event["id"],
+        "status": "open",
+    }
+    await send_reaction_to_chat(
+        bot,
+        telegram_id,
+        "tori",
+        str(event["emotion"]),
+        str(event["text"]),
+        reply_markup=tori_autonomous_menu(notification.id, event["choices"]),
+    )
+
+
+async def _send_static_selin_event(
+    notification: Notification,
+    bot: Bot,
+    telegram_id: int,
+) -> None:
+    period = str((notification.payload or {}).get("period") or "day")
+    text = (
+        "— Я просто проверяю, что связь ещё работает. Не обязательно каждый раз ждать, пока появится новая проблема."
+        if period == "day"
+        else "— День почти закончился. Я здесь. На случай, если ты вдруг решила проверить."
+    )
+    notification.payload = {
+        "period": period,
+        "event_type": "selin_static",
+        "status": "closed",
+    }
+    await send_reaction_to_chat(bot, telegram_id, "selin", "neutral", text)
+
+
+async def _send_selin_autonomous_event(
+    session,
+    notification: Notification,
+    bot: Bot,
+    telegram_id: int,
+    profile: UserProfile,
+    now: datetime,
+) -> bool:
+    level, _, _ = level_from_xp(profile.xp)
+    if level < 2 or not ai_enabled() or not await reserve_ai_call(session, profile.id, "initiative"):
+        return False
+
+    try:
+        context = await build_ai_context(session, profile)
+        can_offer = await can_offer_ai_quest(session, profile.id, now.date())
+        # Release the SQLite write transaction before the network call.
+        await session.commit()
+        result = await generate_selin_initiative(context=context, can_offer_quest=can_offer)
+
+        offer = None
+        if result.get("offer_quest") and can_offer:
+            title = str(result.get("quest_title") or "").strip()
+            if title:
+                offer = await create_ai_quest_offer(
+                    session,
+                    profile,
+                    title=title,
+                    difficulty=str(result.get("quest_difficulty") or "easy"),
+                    reason=str(result.get("quest_reason") or ""),
+                )
+
+        text = str(result.get("text") or "Ты сегодня совсем пропала.")
+        if offer:
+            text += (
+                f"\n\n📜 Задание: {offer.title}"
+                f"\nНаграда: +{offer.reward_xp} XP · +{offer.reward_coins} монет"
+            )
+            if offer.reason:
+                text += f"\n{offer.reason}"
+
+        period = str((notification.payload or {}).get("period") or "day")
+        notification.payload = {
+            "period": period,
+            "event_type": "selin",
+            "status": "open",
+            "turns_left": 3,
+            "initiative_text": text,
+        }
+        ai_state = await get_or_create_ai_state(session, profile)
+        append_recent_message(ai_state, "assistant", text)
+        ai_state.last_initiative_on = now.date()
+
+        await send_reaction_to_chat(
+            bot,
+            telegram_id,
+            "selin",
+            str(result.get("emotion") or "neutral"),
+            text,
+            reply_markup=ai_initiative_menu(notification.id, offer.id if offer else None),
+        )
+        if result.get("show_tori") and str(result.get("tori_text") or "").strip():
+            try:
+                await send_reaction_to_chat(
+                    bot,
+                    telegram_id,
+                    "tori",
+                    str(result.get("tori_emotion") or "neutral"),
+                    str(result.get("tori_text")),
+                )
+            except Exception as exc:
+                print("AI initiative Tori reaction error:", repr(exc))
+        return True
+    except Exception as exc:
+        print("AI initiative error:", repr(exc))
+        await session.rollback()
+        await session.refresh(notification)
+        return False
 
 
 async def send_due(bot: Bot) -> None:
@@ -124,9 +268,39 @@ async def send_due(bot: Bot) -> None:
         for n in due:
             telegram_id = await _get_profile_telegram_id(session, n.user_id)
             progress = await get_or_create_story_progress(session, n.user_id, now.date())
-            chapter = story_chapter(story_day(progress, now.date()))
+            current_story_day = story_day(progress, now.date())
+            chapter = story_chapter(current_story_day)
 
-            if n.kind == "activity_nudge":
+            if n.kind == "autonomous_event":
+                profile = await session.get(UserProfile, n.user_id)
+                sent_selin = False
+                if profile and random.random() < 0.65:
+                    sent_selin = await _send_selin_autonomous_event(
+                        session,
+                        n,
+                        bot,
+                        telegram_id,
+                        profile,
+                        now,
+                    )
+                if not sent_selin:
+                    if current_story_day >= 2:
+                        await _send_tori_autonomous_event(session, n, bot, telegram_id, chapter)
+                    else:
+                        await _send_static_selin_event(n, bot, telegram_id)
+
+            elif n.kind == "activity_nudge":
+                replacement = await session.scalar(
+                    select(Notification.id).where(
+                        Notification.user_id == n.user_id,
+                        Notification.kind == "autonomous_event",
+                        Notification.scheduled_at >= local_dt(now.date(), 0, 0),
+                        Notification.scheduled_at < local_dt(now.date() + timedelta(days=1), 0, 0),
+                    ).limit(1)
+                )
+                if replacement:
+                    n.sent_at = now
+                    continue
                 sent_ai = False
                 profile = await session.get(UserProfile, n.user_id)
                 if profile and ai_enabled():
