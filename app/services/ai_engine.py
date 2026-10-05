@@ -200,23 +200,43 @@ def _selin_system(context: dict[str, Any], *, can_offer_quest: bool) -> str:
 
 
 async def _structured_response(*, system: str, user_content: Any, schema_name: str, schema: dict, max_tokens: int = 350) -> dict:
-    response = await _client().responses.create(
-        model=settings.openai_model,
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ],
-        max_output_tokens=max_tokens,
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": schema_name,
-                "strict": True,
-                "schema": schema,
-            }
-        },
-    )
-    return json.loads(response.output_text)
+    client = _client()
+    last_error: Exception | None = None
+
+    for attempt in range(2):
+        response = await client.responses.create(
+            model=settings.openai_model,
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            max_output_tokens=max_tokens if attempt == 0 else max(max_tokens * 2, 800),
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        )
+        output_text = (response.output_text or "").strip()
+        if not output_text:
+            last_error = RuntimeError(
+                f"OpenAI returned empty output (status={response.status}, "
+                f"incomplete_details={response.incomplete_details})"
+            )
+            continue
+        try:
+            result = json.loads(output_text)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if isinstance(result, dict):
+            return result
+        last_error = TypeError("OpenAI structured output is not a JSON object")
+
+    raise RuntimeError("OpenAI did not return valid structured output after retry") from last_error
 
 
 async def generate_selin_reply(
