@@ -33,6 +33,7 @@ from app.services.steps import evaluate_steps
 from app.services.hydration import record_hydration
 from app.services.self_workouts import weekly_workout_summary
 from app.services.challenges import challenge_dashboard_line, get_plan
+from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.story import (
     advance_week1_if_due, affinity_label, current_story_objective,
     get_or_create_story_progress, initialize_week1_v2, next_sync_unlock,
@@ -192,6 +193,7 @@ async def meal(callback: CallbackQuery) -> None:
         await session.commit()
     suffix = "\n+20 XP · +3 монеты" if rewarded else "\nЛимит награды за еду на сегодня уже достигнут."
     await send_reaction(callback.message, "tori", "curious", pick(MEAL_REACTIONS) + suffix)
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for text in achievement_messages(unlocked):
         await callback.message.answer(text)
     await callback.answer()
@@ -211,6 +213,7 @@ async def water(callback: CallbackQuery) -> None:
         await session.commit()
     suffix = "\n+3 XP · +1 связь с Тори" if rewarded else "\nНаграда за гидратацию на сегодня уже закрыта, но отметку я сохранила."
     await send_reaction(callback.message, "tori", "happy", pick(WATER_REACTIONS) + suffix)
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for text in achievement_messages(unlocked):
         await callback.message.answer(text)
     await callback.answer()
@@ -291,6 +294,7 @@ async def drink_type(callback: CallbackQuery) -> None:
         await send_reaction(callback.message, "tori", "happy", pick(WATER_REACTIONS) + suffix)
     else:
         await callback.message.answer(pick(DRINK_REACTIONS))
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for text in achievement_messages(unlocked):
         await callback.message.answer(text)
     await callback.answer()
@@ -459,6 +463,7 @@ async def save_steps(message: Message, state: FSMContext) -> None:
         step_reaction_emotion(tier.key),
         random.choice(tier.reactions) + reward,
     )
+    await check_and_notify_challenges(message, message.from_user.id, message.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await message.answer(msg)
     await state.clear()

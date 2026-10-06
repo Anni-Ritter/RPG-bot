@@ -352,7 +352,7 @@ async def evaluate_plan(
         code = str(option.get("code") or "")
         target = int(option.get("target") or 0)
         if is_limit_challenge(code):
-            ready_to_close = final or now_local().hour >= 20
+            ready_to_close = final
             if not ready_to_close:
                 continue
             completed = current <= target

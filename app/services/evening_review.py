@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import EveningNutritionReview, UserProfile
 from app.services.ai_engine import ai_enabled, generate_evening_nutrition_review
 from app.services.ai_features import build_ai_context, get_coach_rules, reserve_ai_call
-from app.services.challenges import challenge_summary, evaluate_plan, get_plan
+from app.services.challenges import challenge_state, challenge_summary, evaluate_plan, get_plan
 from app.services.nutrition import daily_nutrition_entries
 
 
@@ -64,13 +64,21 @@ async def create_evening_review(
 
     plan = await get_plan(session, profile.id, day)
     chest = False
+    newly_completed_titles: list[str] = []
     if plan is None:
         challenge_text = "Челленджи сегодня не выбирались."
     else:
+        before_completed = set(challenge_state(plan)["completed"])
         _challenge_status, challenge_values, chest_count = await evaluate_plan(
             session, profile, plan, final=finalize_challenge
         )
         chest = bool(chest_count)
+        after_completed = set(challenge_state(plan)["completed"])
+        if finalize_challenge:
+            options = list(plan.options or [])
+            for index in sorted(after_completed - before_completed):
+                if 0 <= index < len(options):
+                    newly_completed_titles.append(str(options[index].get("title") or "Испытание"))
         challenge_text = challenge_summary(plan, challenge_values, final=True)
 
     result = None
@@ -97,6 +105,18 @@ async def create_evening_review(
         else:
             text = "Сегодня почти нет записей по еде, поэтому нормальный разбор делать не из чего."
         result = {"text": text, "emotion": "neutral", "tomorrow_focus": "Просто продолжай отмечать еду."}
+
+    if newly_completed_titles:
+        reward_xp = int(plan.reward_xp or 0) * len(newly_completed_titles) if plan else 0
+        reward_coins = int(plan.reward_coins or 0) * len(newly_completed_titles) if plan else 0
+        completed_lines = "\n".join(f"✅ {title}" for title in newly_completed_titles)
+        result["text"] = (
+            str(result.get("text") or "")
+            + "\n\n🎯 Испытания закрыты по итогам дня:\n"
+            + completed_lines
+            + f"\n+{reward_xp} XP · +{reward_coins} монет"
+            + ("\n🎁 +1 Сундук испытания" if chest else "")
+        )
 
     if existing:
         existing.text = str(result.get("text") or "")[:8000]

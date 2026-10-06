@@ -24,6 +24,7 @@ from app.keyboards import (
 from app.models import AIImageAnalysis
 from app.services.ai_engine import ai_enabled, analyze_activity_image, analyze_food_images
 from app.services.ai_features import reserve_ai_call
+from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.assets import send_reaction
 from app.services.nutrition import (
     can_scale_by_grams,
@@ -950,6 +951,7 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
     if text:
         await _finish_result_message(callback.message, text)
+        await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     await state.clear()
 
 
@@ -980,6 +982,7 @@ async def accept_food_grams(message: Message, state: FSMContext) -> None:
     await state.clear()
     if text:
         await send_reaction(message, "selin", "smirk", text)
+        await check_and_notify_challenges(message, message.from_user.id, message.from_user.full_name)
 
 
 @router.callback_query(F.data.startswith("photoai:activity:accept:"))
@@ -1056,6 +1059,7 @@ async def accept_activity_analysis(callback: CallbackQuery) -> None:
     if reward_lines:
         text += "\n" + "\n".join(reward_lines)
     await _finish_result_message(callback.message, text)
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
 
 
 @router.callback_query(F.data.startswith("photoai:discard:"))

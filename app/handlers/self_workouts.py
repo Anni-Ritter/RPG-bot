@@ -12,6 +12,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import back_menu, manual_workout_duration_menu, manual_workout_type_menu
 from app.services.achievements import achievement_messages, check_achievements
+from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.assets import replace_text_view, send_background, send_reaction
 from app.services.rewards import apply_reward, get_or_create_profile
 from app.services.self_workouts import (
@@ -171,6 +172,7 @@ async def _save_manual_workout(
         details += "\nТренировка записана. Полная награда за самостоятельную тренировку сегодня уже получена."
 
     await send_reaction(message, character, emotion, reaction + details)
+    await check_and_notify_challenges(message, telegram_id, full_name)
     for text in achievement_messages(unlocked):
         await message.answer(text)
 

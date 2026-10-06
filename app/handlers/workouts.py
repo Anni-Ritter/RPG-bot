@@ -10,6 +10,7 @@ from app.db import SessionLocal
 from app.keyboards import bonus_finish_menu
 from app.models import WorkoutSession
 from app.services.achievements import achievement_messages, check_achievements
+from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.assets import send_reaction
 from app.services.phrases import BONUS_ACCEPTED, BONUS_DECLINED, pick
 from app.services.rewards import apply_reward, get_or_create_profile
@@ -83,6 +84,7 @@ async def finish_monday(callback: CallbackQuery) -> None:
         unlocked = await check_achievements(session, profile)
         await session.commit()
     await send_reaction(callback.message, "selin", "triumphant", "Селин: — Хорошо. Сегодня к тебе вопросов нет.\n+100 XP · +20 монет · +1 Сила")
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()
@@ -115,6 +117,7 @@ async def leave_bonus(callback: CallbackQuery) -> None:
         unlocked = await check_achievements(session, profile)
         await session.commit()
     await send_reaction(callback.message, "selin", "neutral", pick(BONUS_DECLINED) + "\n+100 XP · +20 монет · +1 Сила")
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()
@@ -140,6 +143,7 @@ async def go_bonus(callback: CallbackQuery) -> None:
         pick(BONUS_ACCEPTED) + "\n\nПервая тренировка закрыта: +100 XP · +20 монет · +1 Сила",
         reply_markup=bonus_finish_menu(),
     )
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     await callback.answer()
 
 
@@ -172,6 +176,7 @@ async def finish_bonus(callback: CallbackQuery) -> None:
         "+150 XP · +40 монет · +1 Воля · +5 связь с Тори\n"
         "🎁 Получен Сундук испытания."
     )
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()

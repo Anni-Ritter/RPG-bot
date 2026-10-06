@@ -21,6 +21,7 @@ from app.services.challenges import (
     progress_text,
     select_option,
 )
+from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.rewards import get_or_create_profile
 
 router = Router()
@@ -45,8 +46,8 @@ def _trim(text: str, limit: int) -> str:
 
 
 async def _plan_text_and_markup(session, profile, plan: DailyChallengePlan):
-    _, values, chests = await evaluate_plan(session, profile, plan, final=False)
     state = challenge_state(plan)
+    values = {}
     options = list(plan.options or [])[:3]
 
     lines = [
@@ -83,9 +84,6 @@ async def _plan_text_and_markup(session, profile, plan: DailyChallengePlan):
         elif option.get("why"):
             lines.append("Зачем: " + _trim(option.get("why"), 95))
         lines.append("")
-
-    if chests:
-        lines.append(f"✨ Сундуков за проверку: +{chests}")
 
     markup = daily_challenge_options_menu(
         options,
@@ -185,6 +183,17 @@ async def choose_challenge(callback: CallbackQuery) -> None:
                 await _edit_challenge_message(callback.message, text, markup)
                 return
 
+            await session.commit()
+
+        # If the user already met this target before accepting it, close it immediately
+        # and announce the reward instead of silently turning the icon green.
+        await check_and_notify_challenges(
+            callback.message, telegram_id, callback.from_user.full_name
+        )
+
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, telegram_id, callback.from_user.full_name)
+            plan = await get_plan(session, profile.id, now_local().date())
             text, markup = await _plan_text_and_markup(session, profile, plan)
             await session.commit()
 
@@ -202,20 +211,17 @@ async def check_challenge(callback: CallbackQuery) -> None:
             if plan is None:
                 await callback.answer("На сегодня испытаний ещё нет.", show_alert=True)
                 return
+            await session.commit()
 
-            before = challenge_state(plan)
-            before_completed = set(before["completed"])
-            _, _, chests = await evaluate_plan(session, profile, plan, final=False)
-            after = challenge_state(plan)
-            newly_completed = len(set(after["completed"]) - before_completed)
+        completed = await check_and_notify_challenges(
+            callback.message, telegram_id, callback.from_user.full_name
+        )
+
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, telegram_id, callback.from_user.full_name)
+            plan = await get_plan(session, profile.id, now_local().date())
             text, markup = await _plan_text_and_markup(session, profile, plan)
             await session.commit()
 
-    if newly_completed:
-        note = f"Закрыто сейчас: {newly_completed}."
-        if chests:
-            note += f" И сундук сверху: +{chests}."
-        await callback.answer(note, show_alert=True)
-    else:
-        await callback.answer("Проверила прогресс.")
+    await callback.answer("Испытание закрыто!" if completed else "Проверила прогресс.")
     await _edit_challenge_message(callback.message, text, markup)
