@@ -31,7 +31,7 @@ from app.services.phrases import (
 from app.services.rewards import apply_reward, get_or_create_daily, get_or_create_profile
 from app.services.steps import evaluate_steps
 from app.services.self_workouts import weekly_workout_summary
-from app.services.challenges import challenge_value, get_plan, progress_text
+from app.services.challenges import challenge_dashboard_line, get_plan
 from app.services.story import (
     advance_week1_if_due, affinity_label, current_story_objective,
     get_or_create_story_progress, initialize_week1_v2, next_sync_unlock,
@@ -101,18 +101,7 @@ async def today(message: Message) -> None:
         tori_relation = tori_bond_label(profile.tori_bond)
         chat_allowed, chat_reason = selin_chat_gate(profile, progress, today_date)
         challenge = await get_plan(session, profile.id, today_date)
-        challenge_line = "🎯 Челлендж: ещё не выбран"
-        if challenge and challenge.status == "active" and challenge.selected:
-            current = await challenge_value(session, profile, challenge)
-            selected = dict(challenge.selected or {})
-            challenge_line = (
-                f"🎯 {selected.get('title', 'Челлендж')}: "
-                + progress_text(str(selected.get('code') or ''), current, int(selected.get('target') or 0))
-            )
-        elif challenge and challenge.status == "completed":
-            challenge_line = "🎯 Челлендж: выполнен ✅"
-        elif challenge and challenge.status == "failed":
-            challenge_line = "🎯 Челлендж: не выполнен"
+        challenge_line = await challenge_dashboard_line(session, profile, challenge)
         await session.commit()
 
     if next_threshold is None:

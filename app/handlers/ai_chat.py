@@ -51,7 +51,7 @@ async def _initiative_notification(
     notification_id: int,
 ) -> Notification | None:
     row = await session.get(Notification, notification_id)
-    if not row or row.user_id != profile_id or row.kind != "autonomous_event":
+    if not row or row.user_id != profile_id or row.kind not in {"autonomous_event", "activity_nudge"}:
         return None
     return row
 
@@ -63,7 +63,7 @@ async def _active_initiative_notification(session, profile_id: int) -> Notificat
                 select(Notification)
                 .where(
                     Notification.user_id == profile_id,
-                    Notification.kind == "autonomous_event",
+                    Notification.kind.in_(["autonomous_event", "activity_nudge"]),
                 )
                 .order_by(Notification.id.desc())
                 .limit(10)
@@ -72,7 +72,11 @@ async def _active_initiative_notification(session, profile_id: int) -> Notificat
     )
     for row in rows:
         payload = dict(row.payload or {})
-        if payload.get("event_type") == "selin" and payload.get("status") == "talking":
+        if (
+            payload.get("event_type") == "selin"
+            and payload.get("status") in {"open", "talking"}
+            and row.scheduled_at.date() == now_local().date()
+        ):
             return row
     return None
 
@@ -87,7 +91,7 @@ async def _supersede_initiative_chats(
         select(Notification)
         .where(
             Notification.user_id == profile_id,
-            Notification.kind == "autonomous_event",
+            Notification.kind.in_(["autonomous_event", "activity_nudge"]),
         )
         .order_by(Notification.id.desc())
         .limit(10)
@@ -97,7 +101,7 @@ async def _supersede_initiative_chats(
     rows = list((await session.scalars(query)).all())
     for row in rows:
         payload = dict(row.payload or {})
-        if payload.get("event_type") == "selin" and payload.get("status") == "talking":
+        if payload.get("event_type") == "selin" and payload.get("status") in {"open", "talking"}:
             payload["status"] = "superseded"
             row.payload = payload
 
@@ -283,13 +287,12 @@ async def start_initiative_chat(callback: CallbackQuery, state: FSMContext) -> N
     await state.set_state(InitiativeSelinChatState.talking)
     await state.update_data(initiative_notification_id=notification_id)
     await callback.answer()
-    await send_reaction(
-        callback.message,
-        "selin",
-        "curious",
-        "— Я слушаю. Отвечай сколько хочешь, пока сама не закончишь разговор.",
-        reply_markup=ai_initiative_stop_menu(notification_id),
-    )
+    # Не плодим промежуточное "я слушаю". Само сообщение Селин уже является
+    # началом разговора; после нажатия просто меняем кнопки на завершение.
+    try:
+        await callback.message.edit_reply_markup(reply_markup=ai_initiative_stop_menu(notification_id))
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("initiative:later:"))
@@ -465,9 +468,23 @@ async def react_to_tori_event(callback: CallbackQuery) -> None:
 async def recover_initiative_chat(message: Message, state: FSMContext) -> None:
     if await state.get_state() is not None:
         raise SkipHandler
+    user_text = (message.text or "").strip()
+    if not user_text or user_text.startswith("/") or user_text in NAVIGATION_TEXTS:
+        raise SkipHandler
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
         notification = await _active_initiative_notification(session, profile.id)
+        if notification:
+            payload = dict(notification.payload or {})
+            if payload.get("status") == "open":
+                payload["status"] = "talking"
+                notification.payload = payload
+                await _supersede_initiative_chats(
+                    session,
+                    profile.id,
+                    except_notification_id=notification.id,
+                )
+                await session.commit()
     if not notification:
         raise SkipHandler
     await state.set_state(InitiativeSelinChatState.talking)

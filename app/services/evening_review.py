@@ -63,24 +63,15 @@ async def create_evening_review(
     coach_rules = await get_coach_rules(session, profile.id)
 
     plan = await get_plan(session, profile.id, day)
-    challenge_current = None
     chest = False
     if plan is None:
-        challenge_status = "missing"
-        challenge_text = "Челлендж не был выбран."
+        challenge_text = "Челленджи сегодня не выбирались."
     else:
-        challenge_status = plan.status
-        if plan.status == "active":
-            challenge_status, challenge_current, chest = await evaluate_plan(
-                session, profile, plan, final=finalize_challenge
-            )
-        challenge_text = challenge_summary(plan, challenge_current, final=True)
-        if challenge_status == "completed":
-            challenge_text += " · выполнен"
-        elif challenge_status == "failed":
-            challenge_text += " · не выполнен"
-        elif challenge_status == "choosing":
-            challenge_text = "Челлендж не был выбран."
+        _challenge_status, challenge_values, chest_count = await evaluate_plan(
+            session, profile, plan, final=finalize_challenge
+        )
+        chest = bool(chest_count)
+        challenge_text = challenge_summary(plan, challenge_values, final=True)
 
     result = None
     if ai_enabled() and await reserve_ai_call(session, profile.id, "review"):

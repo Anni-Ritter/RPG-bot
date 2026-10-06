@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import DailyChallengePlan, DailyStat, FoodNutritionLog, UserProfile
+from app.models import DailyChallengePlan, DailyStat, FoodNutritionLog, GameEvent, UserProfile
 from app.services.ai_engine import ai_enabled, generate_daily_challenges
 from app.services.ai_features import build_ai_context, daily_treat_count, get_coach_rules, reserve_ai_call
 from app.services.nutrition import daily_protein_meal_count
@@ -134,7 +134,7 @@ async def ensure_plan(session: AsyncSession, profile: UserProfile, day: date | N
         user_id=profile.id,
         challenge_date=day,
         options=options[:3],
-        selected={},
+        selected={"accepted": [], "completed": [], "failed": []},
         status="choosing",
         reward_xp=CHALLENGE_REWARD_XP,
         reward_coins=CHALLENGE_REWARD_COINS,
@@ -144,15 +144,79 @@ async def ensure_plan(session: AsyncSession, profile: UserProfile, day: date | N
     return plan
 
 
-async def select_option(session: AsyncSession, plan: DailyChallengePlan, index: int) -> bool:
-    if plan.status != "choosing":
-        return False
+def challenge_state(plan: DailyChallengePlan) -> dict[str, list[int]]:
+    """Return the V12 multi-challenge state, migrating the old single selection in memory."""
+    raw = dict(plan.selected or {})
+    options = list(plan.options or [])
+
+    if any(key in raw for key in ("accepted", "completed", "failed")):
+        def clean(name: str) -> list[int]:
+            values = []
+            for value in list(raw.get(name) or []):
+                try:
+                    idx = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < len(options) and idx not in values:
+                    values.append(idx)
+            return values
+
+        accepted = clean("accepted")
+        completed = [i for i in clean("completed") if i in accepted]
+        failed = [i for i in clean("failed") if i in accepted and i not in completed]
+        return {"accepted": accepted, "completed": completed, "failed": failed}
+
+    # Legacy V9-V11 format: selected contained one challenge object.
+    if raw.get("code"):
+        match = next(
+            (
+                i for i, option in enumerate(options)
+                if option.get("code") == raw.get("code")
+                and (not raw.get("title") or option.get("title") == raw.get("title"))
+            ),
+            None,
+        )
+        if match is None:
+            match = next((i for i, option in enumerate(options) if option.get("code") == raw.get("code")), None)
+        if match is not None:
+            completed = [match] if plan.status == "completed" else []
+            failed = [match] if plan.status == "failed" else []
+            return {"accepted": [match], "completed": completed, "failed": failed}
+
+    return {"accepted": [], "completed": [], "failed": []}
+
+
+def _store_state(plan: DailyChallengePlan, state: dict[str, list[int]]) -> None:
+    plan.selected = {
+        "accepted": sorted(set(state.get("accepted") or [])),
+        "completed": sorted(set(state.get("completed") or [])),
+        "failed": sorted(set(state.get("failed") or [])),
+    }
+
+
+def active_indices(plan: DailyChallengePlan) -> list[int]:
+    state = challenge_state(plan)
+    terminal = set(state["completed"]) | set(state["failed"])
+    return [i for i in state["accepted"] if i not in terminal]
+
+
+def available_indices(plan: DailyChallengePlan) -> list[int]:
+    accepted = set(challenge_state(plan)["accepted"])
+    return [i for i in range(len(list(plan.options or []))) if i not in accepted]
+
+
+def select_option(session: AsyncSession, plan: DailyChallengePlan, index: int) -> bool:
     options = list(plan.options or [])
     if index < 0 or index >= len(options):
         return False
-    plan.selected = dict(options[index])
+    state = challenge_state(plan)
+    if index in state["accepted"]:
+        return False
+    state["accepted"].append(index)
+    _store_state(plan, state)
     plan.status = "active"
-    plan.selected_at = now_local()
+    if plan.selected_at is None:
+        plan.selected_at = now_local()
     return True
 
 
@@ -166,9 +230,13 @@ async def _food_log_count(session: AsyncSession, user_id: int, day: date) -> int
     return int(count or 0)
 
 
-async def challenge_value(session: AsyncSession, profile: UserProfile, plan: DailyChallengePlan) -> int:
-    selected = dict(plan.selected or {})
-    code = selected.get("code")
+async def challenge_value_for_option(
+    session: AsyncSession,
+    profile: UserProfile,
+    plan: DailyChallengePlan,
+    option: dict,
+) -> int:
+    code = option.get("code")
     day = plan.challenge_date
     stat = await get_or_create_daily(session, profile.id, day)
     if code == "steps":
@@ -188,6 +256,16 @@ async def challenge_value(session: AsyncSession, profile: UserProfile, plan: Dai
     if code == "protein_meals":
         return await daily_protein_meal_count(session, profile.id, day)
     return 0
+
+
+async def challenge_value(session: AsyncSession, profile: UserProfile, plan: DailyChallengePlan) -> int:
+    """Backward-compatible helper: value of the first active/accepted challenge."""
+    state = challenge_state(plan)
+    candidates = active_indices(plan) or state["accepted"]
+    if not candidates:
+        return 0
+    options = list(plan.options or [])
+    return await challenge_value_for_option(session, profile, plan, options[candidates[0]])
 
 
 def is_limit_challenge(code: str) -> bool:
@@ -216,68 +294,151 @@ def progress_text(code: str, current: int, target: int, *, final: bool = False) 
     return str(current)
 
 
+async def _award_completed_option(
+    session: AsyncSession,
+    profile: UserProfile,
+    plan: DailyChallengePlan,
+    index: int,
+    option: dict,
+) -> int:
+    await apply_reward(
+        session,
+        profile,
+        event_type="daily_challenge_complete",
+        xp=plan.reward_xp,
+        coins=plan.reward_coins,
+        payload={
+            "challenge_date": plan.challenge_date.isoformat(),
+            "challenge_index": index,
+            **option,
+        },
+    )
+    await session.flush()
+    completed_count = await session.scalar(
+        select(func.count(GameEvent.id)).where(
+            GameEvent.user_id == profile.id,
+            GameEvent.event_type == "daily_challenge_complete",
+        )
+    )
+    if completed_count and int(completed_count) % 3 == 0:
+        profile.trial_chests += 1
+        return 1
+    return 0
+
+
 async def evaluate_plan(
     session: AsyncSession,
     profile: UserProfile,
     plan: DailyChallengePlan,
     *,
     final: bool = False,
-) -> tuple[str, int, bool]:
-    if plan.status in {"completed", "failed"}:
-        current = await challenge_value(session, profile, plan) if plan.selected else 0
-        return plan.status, current, False
-    if plan.status != "active" or not plan.selected:
-        return plan.status, 0, False
+) -> tuple[str, dict[int, int], int]:
+    """Evaluate every accepted challenge. Returns (plan_status, values_by_index, chests_awarded)."""
+    options = list(plan.options or [])
+    state = challenge_state(plan)
+    values: dict[int, int] = {}
+    chests = 0
 
-    selected = dict(plan.selected)
-    code = str(selected.get("code") or "")
-    target = int(selected.get("target") or 0)
-    current = await challenge_value(session, profile, plan)
+    for index in list(state["accepted"]):
+        if index < 0 or index >= len(options):
+            continue
+        option = dict(options[index])
+        current = await challenge_value_for_option(session, profile, plan, option)
+        values[index] = current
 
-    if is_limit_challenge(code):
-        # Do not award a "limit" challenge at noon and then invalidate it later.
-        ready_to_close = final or now_local().hour >= 20
-        if not ready_to_close:
-            return "active", current, False
-        completed = current <= target
-    else:
-        completed = current >= target
+        if index in state["completed"] or index in state["failed"]:
+            continue
 
-    if completed:
+        code = str(option.get("code") or "")
+        target = int(option.get("target") or 0)
+        if is_limit_challenge(code):
+            ready_to_close = final or now_local().hour >= 20
+            if not ready_to_close:
+                continue
+            completed = current <= target
+        else:
+            completed = current >= target
+
+        if completed:
+            state["completed"].append(index)
+            chests += await _award_completed_option(session, profile, plan, index, option)
+        elif final:
+            state["failed"].append(index)
+
+    _store_state(plan, state)
+
+    active = active_indices(plan)
+    available = available_indices(plan)
+    if active:
+        plan.status = "active"
+    elif available and not final:
+        plan.status = "choosing"
+    elif state["failed"]:
+        plan.status = "failed"
+    elif state["completed"]:
         plan.status = "completed"
         plan.completed_at = now_local()
-        await apply_reward(
-            session,
-            profile,
-            event_type="daily_challenge_complete",
-            xp=plan.reward_xp,
-            coins=plan.reward_coins,
-            payload={"challenge_date": plan.challenge_date.isoformat(), **selected},
-        )
-        # Flush first so the just-completed row is visible to the aggregate query.
-        await session.flush()
-        completed_count = await session.scalar(
-            select(func.count(DailyChallengePlan.id)).where(
-                DailyChallengePlan.user_id == profile.id,
-                DailyChallengePlan.status == "completed",
+    else:
+        plan.status = "choosing"
+
+    return plan.status, values, chests
+
+
+def challenge_summary(
+    plan: DailyChallengePlan,
+    values: dict[int, int] | None = None,
+    *,
+    final: bool = False,
+) -> str:
+    options = list(plan.options or [])
+    state = challenge_state(plan)
+    values = values or {}
+    lines: list[str] = []
+    for index, option in enumerate(options[:3]):
+        if index in state["completed"]:
+            icon = "✅"
+        elif index in state["failed"]:
+            icon = "❌"
+        elif index in state["accepted"]:
+            icon = "🎯"
+        else:
+            icon = "▫️"
+        line = f"{icon} {index + 1}. {option.get('title', 'Челлендж')}: {option.get('description', '')}".strip()
+        if index in state["accepted"] and index in values:
+            line += "\n   " + progress_text(
+                str(option.get("code") or ""),
+                values[index],
+                int(option.get("target") or 0),
+                final=final,
             )
-        )
-        chest = bool(completed_count and int(completed_count) % 3 == 0)
-        if chest:
-            profile.trial_chests += 1
-        return "completed", current, chest
-
-    if final:
-        plan.status = "failed"
-        return "failed", current, False
-    return "active", current, False
+        elif final and index not in state["accepted"]:
+            line += " · не брала"
+        lines.append(line)
+    return "\n".join(lines) if lines else "Челленджей на сегодня нет."
 
 
-def challenge_summary(plan: DailyChallengePlan, current: int | None = None, *, final: bool = False) -> str:
-    if not plan.selected:
-        return "Челлендж ещё не выбран."
-    selected = dict(plan.selected)
-    text = f"{selected.get('title', 'Челлендж дня')}: {selected.get('description', '')}".strip()
-    if current is not None:
-        text += "\n" + progress_text(str(selected.get("code") or ""), current, int(selected.get("target") or 0), final=final)
-    return text
+async def challenge_dashboard_line(
+    session: AsyncSession,
+    profile: UserProfile,
+    plan: DailyChallengePlan | None,
+) -> str:
+    if plan is None:
+        return "🎯 Челленджи: ещё не выбраны"
+    state = challenge_state(plan)
+    active = active_indices(plan)
+    if active:
+        options = list(plan.options or [])
+        parts = []
+        for index in active[:3]:
+            option = options[index]
+            current = await challenge_value_for_option(session, profile, plan, option)
+            parts.append(
+                f"{option.get('title', 'Челлендж')}: "
+                + progress_text(str(option.get("code") or ""), current, int(option.get("target") or 0))
+            )
+        done = len(state["completed"])
+        suffix = f" · закрыто {done}" if done else ""
+        return "🎯 " + " | ".join(parts) + suffix
+    if state["completed"]:
+        return f"🎯 Челленджи: закрыто {len(state['completed'])} · можно взять ещё {len(available_indices(plan))}"
+    return "🎯 Челленджи: выбери один, два или все три"

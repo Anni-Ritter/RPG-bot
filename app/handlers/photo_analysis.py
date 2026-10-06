@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, User
@@ -50,10 +52,179 @@ class PhotoAnalyzeState(StatesGroup):
 
 
 MAX_FOOD_PHOTOS = 8
+MEDIA_GROUP_DEBOUNCE_SECONDS = 0.8
+
+
+# Telegram sends an album as several independent updates.  Without a tiny
+# debounce every photo can race the FSM and create its own "Что на
+# изображении?" message.  One media group is one food portion for this bot,
+# so collect the whole album first and only then open the analysis wizard.
+_media_groups: dict[tuple[int, int, str], dict] = {}
+_media_groups_lock = asyncio.Lock()
 
 
 def now_local() -> datetime:
     return datetime.now(TZ)
+
+
+async def _send_flow_message(message: Message, state: FSMContext, text: str, *, reply_markup=None) -> None:
+    sent = await message.answer(text, reply_markup=reply_markup)
+    await state.update_data(photo_flow_message_id=sent.message_id)
+
+
+async def _edit_flow_message(message: Message, state: FSMContext, text: str, *, reply_markup=None) -> None:
+    """Keep the photo-analysis wizard in one Telegram message.
+
+    User photos/comments remain in chat, but service prompts replace each
+    other instead of producing a long chain of buttons.
+    """
+
+    data = await state.get_data()
+    message_id = data.get("photo_flow_message_id")
+    if message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=int(message_id),
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return
+        except TelegramBadRequest as exc:
+            # "message is not modified" is harmless; for any other edit
+            # limitation fall back to a fresh wizard message.
+            if "message is not modified" in str(exc).lower():
+                return
+        except Exception:
+            pass
+    await _send_flow_message(message, state, text, reply_markup=reply_markup)
+
+
+async def _delete_flow_message(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    message_id = data.get("photo_flow_message_id")
+    if not message_id:
+        return
+    try:
+        await message.bot.delete_message(message.chat.id, int(message_id))
+    except Exception:
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=int(message_id),
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+
+
+async def _finish_result_message(message: Message, text: str) -> None:
+    """Close inline buttons without creating another reaction message when possible."""
+    suffix = f"\n\n✅ {text}"
+    try:
+        if message.photo:
+            base = message.caption or ""
+            combined = base + suffix
+            if len(combined) <= 1000:
+                await message.edit_caption(caption=combined, reply_markup=None)
+                return
+        elif message.text:
+            combined = message.text + suffix
+            if len(combined) <= 3900:
+                await message.edit_text(combined, reply_markup=None)
+                return
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await message.answer(text)
+
+
+def _merge_comment(existing: str, captions: list[str]) -> str:
+    parts = [existing.strip()] if existing and existing.strip() else []
+    for caption in captions:
+        caption = caption.strip()
+        if caption and caption not in parts:
+            parts.append(caption)
+    return "\n".join(parts).strip()
+
+
+async def _finalize_media_group(key: tuple[int, int, str]) -> None:
+    await asyncio.sleep(MEDIA_GROUP_DEBOUNCE_SECONDS)
+    async with _media_groups_lock:
+        payload = _media_groups.pop(key, None)
+    if not payload:
+        return
+
+    message: Message = payload["message"]
+    state: FSMContext = payload["state"]
+    mode = str(payload.get("mode") or "initial")
+    new_ids = list(payload.get("file_ids") or [])[:MAX_FOOD_PHOTOS]
+    captions = list(payload.get("captions") or [])
+    if not new_ids:
+        return
+
+    data = await state.get_data()
+    if mode == "append_food":
+        existing = list(data.get("photo_file_ids") or [])
+        room = max(0, MAX_FOOD_PHOTOS - len(existing))
+        existing.extend(new_ids[:room])
+        comment = _merge_comment(str(data.get("food_comment") or ""), captions)
+        await state.update_data(
+            photo_file_ids=existing,
+            photo_mimes=["image/jpeg"] * len(existing),
+            food_comment=comment,
+            selected_kind="food",
+        )
+        await state.set_state(PhotoAnalyzeState.waiting_kind)
+        await _edit_flow_message(
+            message,
+            state,
+            f"В одной порции собрано {len(existing)} фото. Можно сразу считать или добавить комментарий к составу/весу.",
+            reply_markup=food_photo_prepare_menu(
+                len(existing), has_comment=bool(comment), max_photos=MAX_FOOD_PHOTOS
+            ),
+        )
+        return
+
+    comment = _merge_comment("", captions)
+    await state.update_data(
+        photo_file_ids=new_ids,
+        photo_mimes=["image/jpeg"] * len(new_ids),
+        food_comment=comment,
+    )
+    await state.set_state(PhotoAnalyzeState.waiting_kind)
+    await _edit_flow_message(
+        message,
+        state,
+        f"Что на изображениях? В наборе {len(new_ids)} фото.",
+        reply_markup=photo_kind_menu(),
+    )
+
+
+async def _queue_media_group(message: Message, state: FSMContext, *, mode: str) -> bool:
+    if not message.media_group_id:
+        return False
+    key = (message.chat.id, message.from_user.id, str(message.media_group_id))
+    async with _media_groups_lock:
+        payload = _media_groups.get(key)
+        if payload is None:
+            payload = {
+                "message": message,
+                "state": state,
+                "mode": mode,
+                "file_ids": [],
+                "captions": [],
+                "task": None,
+            }
+            _media_groups[key] = payload
+        payload["file_ids"].append(message.photo[-1].file_id)
+        if message.caption:
+            payload["captions"].append(message.caption)
+        task = payload.get("task")
+        if task and not task.done():
+            task.cancel()
+        payload["task"] = asyncio.create_task(_finalize_media_group(key))
+    return True
 
 
 def _confidence_label(value: str) -> str:
@@ -165,16 +336,21 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
     file_ids = list(data.get("photo_file_ids") or [])
     mime_types = list(data.get("photo_mimes") or [])
     if not file_ids:
-        await message.answer("Я потеряла изображение. Пришли его ещё раз.")
+        await _edit_flow_message(message, state, "Я потеряла изображение. Пришли его ещё раз.")
         await state.clear()
         return
 
     if not await _reserve_vision_call(user, message):
+        await _delete_flow_message(message, state)
         await state.clear()
         return
 
     count = min(len(file_ids), MAX_FOOD_PHOTOS if kind == "food" else 1)
-    await message.answer("Смотрю изображение…" if count == 1 else f"Смотрю изображения: {count} шт.…")
+    await _edit_flow_message(
+        message,
+        state,
+        "Смотрю изображение…" if count == 1 else f"Смотрю изображения: {count} шт.…",
+    )
     try:
         images: list[tuple[bytes, str]] = []
         for index, file_id in enumerate(file_ids[:count]):
@@ -189,7 +365,11 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
             result = await analyze_activity_image(images[0][0], images[0][1])
     except Exception as exc:
         print("AI image analysis error:", repr(exc))
-        await message.answer("Не получилось распознать изображение. Попробуй ещё раз позже или отметь вручную.")
+        await _edit_flow_message(
+            message,
+            state,
+            "Не получилось распознать изображение. Попробуй ещё раз позже или отметь вручную.",
+        )
         await state.clear()
         return
 
@@ -206,6 +386,10 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
         await session.flush()
         analysis_id = row.id
         await session.commit()
+
+    # The wizard itself is disposable.  Keep the user's album and the useful
+    # result, not every intermediate button screen.
+    await _delete_flow_message(message, state)
 
     if kind == "food":
         if result.get("category") == "unknown":
@@ -248,14 +432,18 @@ async def photo_analysis_start(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await state.set_state(PhotoAnalyzeState.waiting_photo)
-    await message.answer(
-        f"Пришли фото еды или скрин из часов / Google Fit. Для еды можно собрать до {MAX_FOOD_PHOTOS} фото: само блюдо, ингредиенты и этикетки с КБЖУ.",
+    await _send_flow_message(
+        message,
+        state,
+        f"Пришли фото еды или скрин из часов / Google Fit. Для еды удобнее отправить одним альбомом до {MAX_FOOD_PHOTOS} фото: блюдо + ингредиенты/упаковки. Подпись к альбому станет комментарием для анализа.",
         reply_markup=back_menu("photoai:cancel", "❌ Отмена"),
     )
 
 
 @router.message(PhotoAnalyzeState.waiting_photo, F.photo)
 async def photo_received_after_prompt(message: Message, state: FSMContext) -> None:
+    if await _queue_media_group(message, state, mode="initial"):
+        return
     photo = message.photo[-1]
     await state.update_data(
         photo_file_ids=[photo.file_id],
@@ -263,17 +451,21 @@ async def photo_received_after_prompt(message: Message, state: FSMContext) -> No
         food_comment=(message.caption or "").strip(),
     )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
-    await message.answer("Что на изображении?", reply_markup=photo_kind_menu())
+    await _edit_flow_message(message, state, "Что на изображении?", reply_markup=photo_kind_menu())
 
 
 @router.message(PhotoAnalyzeState.waiting_more_food_photo, F.photo)
 async def more_food_photo_received(message: Message, state: FSMContext) -> None:
+    if await _queue_media_group(message, state, mode="append_food"):
+        return
     data = await state.get_data()
     file_ids = list(data.get("photo_file_ids") or [])
     mime_types = list(data.get("photo_mimes") or [])
     if len(file_ids) >= MAX_FOOD_PHOTOS:
         await state.set_state(PhotoAnalyzeState.waiting_kind)
-        await message.answer(
+        await _edit_flow_message(
+            message,
+            state,
             f"Уже собрано {MAX_FOOD_PHOTOS} фото — этого хватит даже для очень сложной лепёшки.",
             reply_markup=food_photo_prepare_menu(
                 len(file_ids),
@@ -296,8 +488,10 @@ async def more_food_photo_received(message: Message, state: FSMContext) -> None:
         food_comment=comment,
     )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
-    await message.answer(
-        f"Добавила фото. Сейчас в расчёте: {len(file_ids)}.",
+    await _edit_flow_message(
+        message,
+        state,
+        f"В одной порции собрано {len(file_ids)} фото. Можно считать или добавить комментарий.",
         reply_markup=food_photo_prepare_menu(
             len(file_ids),
             has_comment=bool(comment),
@@ -316,7 +510,9 @@ async def food_comment_received(message: Message, state: FSMContext) -> None:
     await state.update_data(food_comment=comment, selected_kind="food")
     await state.set_state(PhotoAnalyzeState.waiting_kind)
     count = len(data.get("photo_file_ids") or [])
-    await message.answer(
+    await _edit_flow_message(
+        message,
+        state,
         "Комментарий сохранила. Он будет важнее моих догадок по фото.",
         reply_markup=food_photo_prepare_menu(count, has_comment=True, max_photos=MAX_FOOD_PHOTOS),
     )
@@ -332,7 +528,9 @@ async def food_comment_without_button(message: Message, state: FSMContext) -> No
         return
     await state.update_data(food_comment=comment)
     count = len(data.get("photo_file_ids") or [])
-    await message.answer(
+    await _edit_flow_message(
+        message,
+        state,
         "Приняла это как комментарий к еде.",
         reply_markup=food_photo_prepare_menu(count, has_comment=True, max_photos=MAX_FOOD_PHOTOS),
     )
@@ -349,13 +547,27 @@ async def unsolicited_photo(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     existing = list(data.get("photo_file_ids") or [])
 
+    if message.media_group_id:
+        mode = "append_food" if data.get("selected_kind") == "food" and existing else "initial"
+        await _queue_media_group(message, state, mode=mode)
+        return
+
     # Telegram albums arrive as several independent photo updates. If the user
     # sends an album while we are already preparing an analysis, keep appending
     # instead of replacing the previous image. This also makes the repeated
     # "Добавить фото" flow tolerant of sending several images at once.
     if current_state == PhotoAnalyzeState.waiting_kind.state and existing:
         if len(existing) >= MAX_FOOD_PHOTOS:
-            await message.answer(f"Уже собрано {MAX_FOOD_PHOTOS} фото — больше в один анализ не беру.")
+            await _edit_flow_message(
+                message,
+                state,
+                f"Уже собрано {MAX_FOOD_PHOTOS} фото — больше в один анализ не беру.",
+                reply_markup=food_photo_prepare_menu(
+                    len(existing),
+                    has_comment=bool(str(data.get("food_comment") or "").strip()),
+                    max_photos=MAX_FOOD_PHOTOS,
+                ),
+            )
             return
         mimes = list(data.get("photo_mimes") or [])
         existing.append(message.photo[-1].file_id)
@@ -370,9 +582,16 @@ async def unsolicited_photo(message: Message, state: FSMContext) -> None:
             markup = food_photo_prepare_menu(
                 len(existing), has_comment=bool(comment), max_photos=MAX_FOOD_PHOTOS
             )
-            await message.answer(f"Добавила ещё фото. Сейчас в расчёте: {len(existing)}.", reply_markup=markup)
+            await _edit_flow_message(
+                message,
+                state,
+                f"В одной порции собрано {len(existing)} фото. Можно считать или добавить комментарий.",
+                reply_markup=markup,
+            )
         else:
-            await message.answer(
+            await _edit_flow_message(
+                message,
+                state,
                 f"Добавила ещё фото ({len(existing)}). Если это еда — проанализирую их вместе.",
                 reply_markup=photo_kind_menu(),
             )
@@ -385,14 +604,19 @@ async def unsolicited_photo(message: Message, state: FSMContext) -> None:
         food_comment=(message.caption or "").strip(),
     )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
-    await message.answer("Хочешь, чтобы я распознала это фото?", reply_markup=photo_kind_menu())
+    await _send_flow_message(
+        message,
+        state,
+        "Хочешь, чтобы я распознала это фото?",
+        reply_markup=photo_kind_menu(),
+    )
 
 
 @router.callback_query(F.data == "photoai:cancel")
 async def photo_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await _delete_flow_message(callback.message, state)
     await state.clear()
     await callback.answer()
-    await callback.message.answer("Хорошо, не анализирую.")
 
 
 @router.callback_query(F.data.startswith("photoai:kind:"))
@@ -412,8 +636,10 @@ async def choose_photo_kind(callback: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(selected_kind="food")
         await state.set_state(PhotoAnalyzeState.waiting_kind)
         count = len(data.get("photo_file_ids") or [])
-        await callback.message.answer(
-            f"Можно добавить ещё фото упаковок/ингредиентов (до {MAX_FOOD_PHOTOS}) и комментарий: что внутри, сколько граммов, было ли масло/соус и т.д.",
+        await _edit_flow_message(
+            callback.message,
+            state,
+            f"Одна порция = один набор. Можно добавить ещё фото упаковок/ингредиентов (до {MAX_FOOD_PHOTOS}) и комментарий: что внутри, сколько граммов, было ли масло/соус и т.д.",
             reply_markup=food_photo_prepare_menu(
                 count,
                 has_comment=bool(str(data.get("food_comment") or "").strip()),
@@ -438,8 +664,10 @@ async def add_more_food_photo(callback: CallbackQuery, state: FSMContext) -> Non
         return
     await state.set_state(PhotoAnalyzeState.waiting_more_food_photo)
     await callback.answer()
-    await callback.message.answer(
-        f"Пришли ещё фото. Сейчас {len(file_ids)}/{MAX_FOOD_PHOTOS}. Можно прислать упаковку, этикетку или ещё один ингредиент.",
+    await _edit_flow_message(
+        callback.message,
+        state,
+        f"Пришли ещё фото или целый альбом. Сейчас {len(file_ids)}/{MAX_FOOD_PHOTOS}. Всё, что пришлёшь одним набором, считаю одной порцией.",
         reply_markup=back_menu("photoai:cancel", "❌ Отмена"),
     )
 
@@ -453,7 +681,9 @@ async def add_food_comment(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(PhotoAnalyzeState.waiting_food_comment)
     await callback.answer()
-    await callback.message.answer(
+    await _edit_flow_message(
+        callback.message,
+        state,
         "Напиши всё, что знаешь: состав, граммы, сколько чего положила, масло/соус, КБЖУ с упаковки. Можно обычным человеческим текстом.",
         reply_markup=back_menu("photoai:cancel", "❌ Отмена"),
     )
@@ -504,7 +734,10 @@ async def legacy_accept_food_analysis(callback: CallbackQuery, state: FSMContext
 async def choose_food_category_prompt(callback: CallbackQuery) -> None:
     analysis_id = int(callback.data.rsplit(":", 1)[1])
     await callback.answer()
-    await callback.message.answer("Как это записать?", reply_markup=food_category_menu(analysis_id))
+    try:
+        await callback.message.edit_reply_markup(reply_markup=food_category_menu(analysis_id))
+    except Exception:
+        await callback.message.answer("Как это записать?", reply_markup=food_category_menu(analysis_id))
 
 
 @router.callback_query(F.data.startswith("photoai:foodcat:"))
@@ -529,10 +762,15 @@ async def set_food_category(callback: CallbackQuery) -> None:
         await session.commit()
 
     await callback.answer("Категория изменена")
-    await callback.message.answer(
-        "Окей. Теперь выбери, сколько из этой порции записать.",
-        reply_markup=food_analysis_menu(analysis_id, can_enter_grams=can_scale_by_grams(result)),
-    )
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=food_analysis_menu(analysis_id, can_enter_grams=can_scale_by_grams(result))
+        )
+    except Exception:
+        await callback.message.answer(
+            "Теперь выбери, сколько из этой порции записать.",
+            reply_markup=food_analysis_menu(analysis_id, can_enter_grams=can_scale_by_grams(result)),
+        )
 
 
 async def _record_food_choice(
@@ -693,7 +931,7 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
     text = await _record_food_choice(callback, analysis_id=analysis_id, fraction=fraction, portion_label=label)
     await callback.answer()
     if text:
-        await send_reaction(callback.message, "selin", "smirk", text)
+        await _finish_result_message(callback.message, text)
     await state.clear()
 
 
@@ -799,7 +1037,7 @@ async def accept_activity_analysis(callback: CallbackQuery) -> None:
     text = "Записала показатели с изображения."
     if reward_lines:
         text += "\n" + "\n".join(reward_lines)
-    await send_reaction(callback.message, "selin", "smirk", text)
+    await _finish_result_message(callback.message, text)
 
 
 @router.callback_query(F.data.startswith("photoai:discard:"))
@@ -813,4 +1051,7 @@ async def discard_analysis(callback: CallbackQuery) -> None:
             row.resolved_at = now_local()
             await session.commit()
     await callback.answer()
-    await callback.message.answer("Не записываю.")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass

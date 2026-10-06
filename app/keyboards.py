@@ -315,27 +315,49 @@ def food_photo_prepare_menu(photo_count: int = 1, *, has_comment: bool = False, 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def daily_challenge_options_menu(plan_id: int, options: list[dict]) -> InlineKeyboardMarkup:
+def daily_challenge_options_menu(
+    options: list[dict],
+    *,
+    accepted: list[int] | None = None,
+    completed: list[int] | None = None,
+    failed: list[int] | None = None,
+) -> InlineKeyboardMarkup:
+    accepted_set = set(accepted or [])
+    completed_set = set(completed or [])
+    failed_set = set(failed or [])
     rows = []
     for index, option in enumerate(options[:3]):
-        rows.append([
-            InlineKeyboardButton(
-                text=f"{index + 1}. {str(option.get('title') or 'Челлендж')[:48]}",
-                callback_data=f"challenge:select:{plan_id}:{index}",
-            )
-        ])
+        title = str(option.get("title") or "Челлендж")[:42]
+        if index in completed_set:
+            text = f"✅ {index + 1}. {title}"
+            callback_data = "challenge:noop"
+        elif index in failed_set:
+            text = f"❌ {index + 1}. {title}"
+            callback_data = "challenge:noop"
+        elif index in accepted_set:
+            text = f"🎯 {index + 1}. {title}"
+            callback_data = "challenge:noop"
+        else:
+            text = f"➕ {index + 1}. {title}"
+            callback_data = f"challenge:select:{index}"
+        rows.append([InlineKeyboardButton(text=text, callback_data=callback_data)])
+
+    active_count = len(accepted_set - completed_set - failed_set)
+    if active_count:
+        rows.append([InlineKeyboardButton(text="✅ Проверить активные", callback_data="challenge:check")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def daily_challenge_active_menu(plan_id: int) -> InlineKeyboardMarkup:
+def daily_challenge_active_menu(plan_id: int | None = None) -> InlineKeyboardMarkup:
+    # Legacy helper kept for old messages/call sites. New UI uses daily_challenge_options_menu.
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="✅ Проверить челлендж", callback_data=f"challenge:check:{plan_id}")]]
+        inline_keyboard=[[InlineKeyboardButton(text="✅ Проверить активные", callback_data="challenge:check")]]
     )
 
 
 def daily_challenge_open_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🎯 Выбрать челлендж", callback_data="challenge:open")]]
+        inline_keyboard=[[InlineKeyboardButton(text="🎯 Выбрать челленджи", callback_data="challenge:open")]]
     )
 
 def food_analysis_menu(analysis_id: int, *, can_enter_grams: bool = False) -> InlineKeyboardMarkup:

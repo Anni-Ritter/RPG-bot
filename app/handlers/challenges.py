@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
 from app.db import SessionLocal
-from app.keyboards import daily_challenge_active_menu, daily_challenge_options_menu
+from app.keyboards import daily_challenge_options_menu
 from app.models import DailyChallengePlan
-from app.services.assets import send_reaction
 from app.services.challenges import (
-    challenge_summary,
-    challenge_value,
+    active_indices,
+    available_indices,
+    challenge_state,
+    challenge_value_for_option,
     ensure_plan,
     evaluate_plan,
+    get_plan,
+    now_local,
     progress_text,
     select_option,
 )
@@ -19,140 +25,197 @@ from app.services.rewards import get_or_create_profile
 
 router = Router()
 
+# One bot process is enough on Bothost. This lock makes repeated taps harmless while
+# the OpenAI request is still running and the user is waiting for the three options.
+_generation_locks: set[int] = set()
+_action_locks: dict[int, asyncio.Lock] = {}
 
-def _options_text(plan: DailyChallengePlan) -> str:
+
+def _user_lock(telegram_id: int) -> asyncio.Lock:
+    lock = _action_locks.get(telegram_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _action_locks[telegram_id] = lock
+    return lock
+
+
+def _trim(text: str, limit: int) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+async def _plan_text_and_markup(session, profile, plan: DailyChallengePlan):
+    _, values, chests = await evaluate_plan(session, profile, plan, final=False)
+    state = challenge_state(plan)
+    options = list(plan.options or [])[:3]
+
     lines = [
-        "Выбери один челлендж на сегодня. Провал ничего не отнимает — просто не будет награды.",
-        f"Награда: +{plan.reward_xp} XP · +{plan.reward_coins} монет. Каждый третий выполненный челлендж даёт сундук.",
+        "🎯 Испытания на сегодня",
+        "Можно взять один, два или все три — хоть по очереди.",
+        f"Каждый закрытый: +{plan.reward_xp} XP · +{plan.reward_coins} монет. Каждый третий закрытый даёт сундук.",
         "",
     ]
-    for i, option in enumerate(list(plan.options or [])[:3], start=1):
-        lines.append(f"{i}. {option.get('title', 'Челлендж')}")
-        lines.append(str(option.get("description") or ""))
-        if option.get("why"):
-            lines.append(f"Зачем: {option['why']}")
+
+    for index, option in enumerate(options):
+        if index in state["completed"]:
+            icon = "✅"
+        elif index in state["failed"]:
+            icon = "❌"
+        elif index in state["accepted"]:
+            icon = "🎯"
+        else:
+            icon = "➕"
+
+        lines.append(f"{icon} {index + 1}. {_trim(option.get('title', 'Челлендж'), 45)}")
+        lines.append(_trim(option.get("description", ""), 145))
+        if index in state["accepted"]:
+            current = values.get(index)
+            if current is None:
+                current = await challenge_value_for_option(session, profile, plan, option)
+            lines.append(
+                "Прогресс: "
+                + progress_text(
+                    str(option.get("code") or ""),
+                    current,
+                    int(option.get("target") or 0),
+                )
+            )
+        elif option.get("why"):
+            lines.append("Зачем: " + _trim(option.get("why"), 95))
         lines.append("")
-    return "\n".join(lines).strip()
+
+    if chests:
+        lines.append(f"✨ Сундуков за проверку: +{chests}")
+
+    markup = daily_challenge_options_menu(
+        options,
+        accepted=state["accepted"],
+        completed=state["completed"],
+        failed=state["failed"],
+    )
+    return "\n".join(lines).strip(), markup
+
+
+async def _edit_challenge_message(message: Message, text: str, reply_markup=None) -> None:
+    """Prefer replacing the existing challenge message instead of adding chat clutter."""
+    try:
+        if message.photo:
+            # Telegram photo caption limit is 1024 chars.
+            caption = text if len(text) <= 1000 else text[:997].rstrip() + "…"
+            await message.edit_caption(caption=caption, reply_markup=reply_markup)
+        else:
+            await message.edit_text(text, reply_markup=reply_markup)
+        return
+    except TelegramBadRequest:
+        pass
+    except Exception as exc:
+        print("Challenge message edit error:", repr(exc))
+
+    await message.answer(text, reply_markup=reply_markup)
 
 
 async def _show_challenge(message: Message, telegram_id: int, full_name: str | None) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, telegram_id, full_name)
         plan = await ensure_plan(session, profile)
-        if plan.status == "active":
-            status, current, chest = await evaluate_plan(session, profile, plan, final=False)
-            await session.commit()
-        else:
-            status, current, chest = plan.status, 0, False
-
-        if status == "choosing":
-            text = _options_text(plan)
-            markup = daily_challenge_options_menu(plan.id, list(plan.options or []))
-            emotion = "curious"
-        elif status == "active":
-            selected = dict(plan.selected or {})
-            text = (
-                f"🎯 {selected.get('title', 'Челлендж дня')}\n"
-                f"{selected.get('description', '')}\n\n"
-                f"Прогресс: {progress_text(str(selected.get('code') or ''), current, int(selected.get('target') or 0))}\n"
-                f"Награда: +{plan.reward_xp} XP · +{plan.reward_coins} монет"
-            )
-            markup = daily_challenge_active_menu(plan.id)
-            emotion = "smirk"
-        elif status == "completed":
-            text = (
-                "🎯 Челлендж дня выполнен.\n"
-                + challenge_summary(plan, current, final=True)
-                + f"\n\n+{plan.reward_xp} XP · +{plan.reward_coins} монет"
-            )
-            if chest:
-                text += "\n✨ Это третий выполненный челлендж — +1 Сундук испытания."
-            markup = None
-            emotion = "triumphant"
-        else:
-            text = "Сегодняшний челлендж не закрыт. Ничего не потеряно — завтра будет новый выбор."
-            markup = None
-            emotion = "neutral"
-
-    await send_reaction(message, "selin", emotion, text, reply_markup=markup)
+        text, markup = await _plan_text_and_markup(session, profile, plan)
+        await session.commit()
+    await _edit_challenge_message(message, text, markup)
 
 
 @router.message(F.text == "🎯 Челлендж")
 async def daily_challenge(message: Message) -> None:
-    await _show_challenge(message, message.from_user.id, message.from_user.full_name)
+    telegram_id = message.from_user.id
+    if telegram_id in _generation_locks:
+        # First tap already produced the visible loading message. Ignore button spam.
+        return
+
+    _generation_locks.add(telegram_id)
+    loading = await message.answer("⏳ Селин подбирает три испытания на сегодня…")
+    try:
+        await _show_challenge(loading, telegram_id, message.from_user.full_name)
+    finally:
+        _generation_locks.discard(telegram_id)
 
 
 @router.callback_query(F.data == "challenge:open")
 async def open_challenge_callback(callback: CallbackQuery) -> None:
-    await callback.answer()
-    await _show_challenge(callback.message, callback.from_user.id, callback.from_user.full_name)
+    telegram_id = callback.from_user.id
+    if telegram_id in _generation_locks:
+        await callback.answer("Уже подбираю. Секунду.")
+        return
+
+    _generation_locks.add(telegram_id)
+    await callback.answer("Подбираю испытания…")
+    # Immediate visible feedback and the old button disappears, so it cannot be mashed five times.
+    await _edit_challenge_message(callback.message, "⏳ Селин подбирает три испытания на сегодня…", None)
+    try:
+        await _show_challenge(callback.message, telegram_id, callback.from_user.full_name)
+    finally:
+        _generation_locks.discard(telegram_id)
+
+
+@router.callback_query(F.data == "challenge:noop")
+async def challenge_noop(callback: CallbackQuery) -> None:
+    await callback.answer("Этот пункт уже взят или закрыт.")
 
 
 @router.callback_query(F.data.startswith("challenge:select:"))
 async def choose_challenge(callback: CallbackQuery) -> None:
-    parts = callback.data.split(":")
-    if len(parts) != 4:
+    # V12 callbacks are challenge:select:<index>. Old V9-V11 messages contain
+    # challenge:select:<plan_id>:<index>; taking the last component keeps them usable.
+    try:
+        index = int(callback.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        await callback.answer("Не смогла понять этот челлендж.", show_alert=True)
         return
-    plan_id = int(parts[2])
-    index = int(parts[3])
 
-    async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        plan = await session.get(DailyChallengePlan, plan_id)
-        if not plan or plan.user_id != profile.id:
-            await callback.answer("Этот челлендж не найден.", show_alert=True)
-            return
-        if not await select_option(session, plan, index):
-            await callback.answer("Челлендж на сегодня уже выбран.", show_alert=True)
-            return
-        selected = dict(plan.selected or {})
-        current = await challenge_value(session, profile, plan)
-        await session.commit()
+    telegram_id = callback.from_user.id
+    async with _user_lock(telegram_id):
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, telegram_id, callback.from_user.full_name)
+            plan = await get_plan(session, profile.id, now_local().date())
+            if plan is None:
+                plan = await ensure_plan(session, profile)
 
-    await callback.answer("Выбрано")
-    await send_reaction(
-        callback.message,
-        "selin",
-        "smirk",
-        (
-            f"— Хорошо. На сегодня: {selected.get('title', 'челлендж')}.\n\n"
-            f"{selected.get('description', '')}\n"
-            f"Сейчас: {progress_text(str(selected.get('code') or ''), current, int(selected.get('target') or 0))}\n\n"
-            "Если закроешь — забираешь награду. Если нет, ничего не отнимаю."
-        ),
-        reply_markup=daily_challenge_active_menu(plan_id),
-    )
+            if not select_option(session, plan, index):
+                await callback.answer("Этот челлендж уже у тебя.")
+                text, markup = await _plan_text_and_markup(session, profile, plan)
+                await session.commit()
+                await _edit_challenge_message(callback.message, text, markup)
+                return
+
+            text, markup = await _plan_text_and_markup(session, profile, plan)
+            await session.commit()
+
+    await callback.answer("Взято")
+    await _edit_challenge_message(callback.message, text, markup)
 
 
-@router.callback_query(F.data.startswith("challenge:check:"))
+@router.callback_query(F.data.startswith("challenge:check"))
 async def check_challenge(callback: CallbackQuery) -> None:
-    plan_id = int(callback.data.rsplit(":", 1)[1])
-    async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        plan = await session.get(DailyChallengePlan, plan_id)
-        if not plan or plan.user_id != profile.id:
-            await callback.answer("Челлендж не найден.", show_alert=True)
-            return
-        status, current, chest = await evaluate_plan(session, profile, plan, final=False)
-        selected = dict(plan.selected or {})
-        await session.commit()
+    telegram_id = callback.from_user.id
+    async with _user_lock(telegram_id):
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, telegram_id, callback.from_user.full_name)
+            plan = await get_plan(session, profile.id, now_local().date())
+            if plan is None:
+                await callback.answer("На сегодня испытаний ещё нет.", show_alert=True)
+                return
 
-    await callback.answer()
-    if status == "completed":
-        text = f"— Есть. Челлендж закрыт.\n\n+{plan.reward_xp} XP · +{plan.reward_coins} монет"
-        if chest:
-            text += "\n✨ И ещё +1 Сундук испытания за три закрытых челленджа."
-        await send_reaction(callback.message, "selin", "triumphant", text)
-        return
+            before = challenge_state(plan)
+            before_completed = set(before["completed"])
+            _, _, chests = await evaluate_plan(session, profile, plan, final=False)
+            after = challenge_state(plan)
+            newly_completed = len(set(after["completed"]) - before_completed)
+            text, markup = await _plan_text_and_markup(session, profile, plan)
+            await session.commit()
 
-    if status == "active":
-        await send_reaction(
-            callback.message,
-            "selin",
-            "curious",
-            f"Пока не всё.\n{progress_text(str(selected.get('code') or ''), current, int(selected.get('target') or 0))}",
-            reply_markup=daily_challenge_active_menu(plan_id),
-        )
-        return
-
-    await send_reaction(callback.message, "selin", "neutral", "На сегодня этот челлендж уже закрыт.")
+    if newly_completed:
+        note = f"Закрыто сейчас: {newly_completed}."
+        if chests:
+            note += f" И сундук сверху: +{chests}."
+        await callback.answer(note, show_alert=True)
+    else:
+        await callback.answer("Проверила прогресс.")
+    await _edit_challenge_message(callback.message, text, markup)

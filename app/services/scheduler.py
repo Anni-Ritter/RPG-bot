@@ -12,7 +12,6 @@ from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import (
     ai_initiative_menu,
-    ai_quest_offer_menu,
     daily_challenge_open_menu,
     monday_finish_menu,
     tori_autonomous_menu,
@@ -344,7 +343,6 @@ async def send_due(bot: Bot) -> None:
                                         reason=str(result.get("quest_reason") or ""),
                                     )
                             text = str(result.get("text") or "Ты сегодня вообще собираешься двигаться?")
-                            markup = None
                             if offer:
                                 text += (
                                     f"\n\n📜 Задание: {offer.title}"
@@ -352,7 +350,13 @@ async def send_due(bot: Bot) -> None:
                                 )
                                 if offer.reason:
                                     text += f"\n{offer.reason}"
-                                markup = ai_quest_offer_menu(offer.id)
+                            markup = ai_initiative_menu(n.id, offer.id if offer else None)
+                            n.payload = {
+                                **dict(n.payload or {}),
+                                "event_type": "selin",
+                                "status": "open",
+                                "initiative_text": text,
+                            }
                             await send_reaction_to_chat(
                                 bot, telegram_id, "selin", str(result.get("emotion") or "neutral"), text,
                                 reply_markup=markup,
@@ -363,6 +367,7 @@ async def send_due(bot: Bot) -> None:
                                     str(result.get("tori_text")),
                                 )
                             ai_state = await get_or_create_ai_state(session, profile)
+                            append_recent_message(ai_state, "assistant", text)
                             ai_state.last_initiative_on = now.date()
                             sent_ai = True
                         except Exception as exc:
@@ -376,7 +381,7 @@ async def send_due(bot: Bot) -> None:
                     telegram_id,
                     "selin",
                     "curious",
-                    "— Новый день. Выбери один челлендж. Никаких штрафов за провал, но за выполненный я плачу нормально.",
+                    "— Новый день. Я подготовила три испытания. Можешь взять одно, два или вообще все три. За провал ничего не снимаю — награда просто останется у меня.",
                     reply_markup=daily_challenge_open_menu(),
                 )
 
