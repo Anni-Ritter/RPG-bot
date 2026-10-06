@@ -16,7 +16,7 @@ from app.models import CustomQuest, Notification, PendingTemptation, UserAchieve
 from app.services.achievements import achievement_messages, check_achievements
 from app.services.ai_engine import ai_enabled
 from app.services.ai_features import daily_treat_count, get_calorie_target
-from app.services.assets import send_background, send_reaction, step_reaction_emotion
+from app.services.assets import replace_text_view, send_background, send_reaction, step_reaction_emotion
 from app.services.levels import level_from_xp
 from app.services.nutrition import daily_nutrition_totals
 from app.services.phrases import (
@@ -251,9 +251,16 @@ async def treat(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "food:menu")
+async def food_menu_back(callback: CallbackQuery) -> None:
+    await replace_text_view(callback.message, "Что отмечаем?", reply_markup=food_menu())
+    await callback.answer()
+
+
 @router.callback_query(F.data == "food:drink")
 async def drink(callback: CallbackQuery) -> None:
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         "Что пьём? Вода, zero-тоник, чай/кофе без заметных добавок и другие почти некалорийные напитки считаются гидратацией.",
         reply_markup=drink_menu(),
     )
@@ -462,10 +469,17 @@ async def quests(message: Message) -> None:
     await send_background(message, "study", "Пользовательские квесты:", reply_markup=quest_menu())
 
 
+@router.callback_query(F.data == "quest:menu")
+async def quest_menu_back(callback: CallbackQuery) -> None:
+    await replace_text_view(callback.message, "Пользовательские квесты:", reply_markup=quest_menu())
+    await callback.answer()
+
+
 @router.callback_query(F.data == "quest:new")
 async def quest_new(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(QuestState.waiting_title)
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         "Как называется квест?",
         reply_markup=back_menu("state:cancel", "❌ Отмена"),
     )
@@ -520,16 +534,33 @@ async def quest_list(callback: CallbackQuery) -> None:
         )).all())
         await session.commit()
     if not rows:
-        await callback.message.answer("Активных пользовательских квестов нет.")
+        await replace_text_view(
+            callback.message,
+            "Активных пользовательских квестов нет.",
+            reply_markup=back_menu("quest:menu", "⬅️ К квестам"),
+        )
         await callback.answer()
         return
+
+    lines = ["📋 Активные пользовательские квесты", ""]
+    buttons = []
     for quest in rows[:10]:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Выполнено", callback_data=f"quest:done:{quest.id}")
-        ]])
-        await callback.message.answer(
-            f"{quest.title}\n+{quest.reward_xp} XP · +{quest.reward_coins} монет", reply_markup=kb
-        )
+        lines.append(f"• {quest.title} — +{quest.reward_xp} XP · +{quest.reward_coins} монет")
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"✅ {quest.title[:36]}",
+                callback_data=f"quest:done:{quest.id}",
+            )
+        ])
+    if len(rows) > 10:
+        lines.append("")
+        lines.append(f"Показаны последние 10 из {len(rows)}.")
+    buttons.append([InlineKeyboardButton(text="⬅️ К квестам", callback_data="quest:menu")])
+    await replace_text_view(
+        callback.message,
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
     await callback.answer()
 
 

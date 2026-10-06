@@ -12,7 +12,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import back_menu, manual_workout_duration_menu, manual_workout_type_menu
 from app.services.achievements import achievement_messages, check_achievements
-from app.services.assets import send_background, send_reaction
+from app.services.assets import replace_text_view, send_background, send_reaction
 from app.services.rewards import apply_reward, get_or_create_profile
 from app.services.self_workouts import (
     WORKOUT_KIND_LABELS,
@@ -53,9 +53,21 @@ async def manual_workout_type(callback: CallbackQuery, state: FSMContext) -> Non
         return
 
     await state.update_data(workout_kind=kind)
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         f"{WORKOUT_KIND_LABELS[kind]}. Сколько примерно занималась?",
         reply_markup=manual_workout_duration_menu(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "manualworkout:back:type")
+async def manual_workout_back_to_type(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(None)
+    await replace_text_view(
+        callback.message,
+        "Что сегодня было? Выбери тип дополнительной или домашней тренировки.",
+        reply_markup=manual_workout_type_menu(),
     )
     await callback.answer()
 
@@ -65,7 +77,8 @@ async def manual_workout_minutes(callback: CallbackQuery, state: FSMContext) -> 
     raw = callback.data.rsplit(":", 1)[1]
     if raw == "custom":
         await state.set_state(ManualWorkoutState.waiting_minutes)
-        await callback.message.answer(
+        await replace_text_view(
+            callback.message,
             "Введи количество минут числом, например 35.",
             reply_markup=back_menu("state:cancel", "❌ Отмена"),
         )

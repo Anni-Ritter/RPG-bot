@@ -43,6 +43,7 @@ def manual_workout_duration_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="60+ мин", callback_data="manualworkout:minutes:60"),
             ],
             [InlineKeyboardButton(text="⌨️ Ввести минуты", callback_data="manualworkout:minutes:custom")],
+            [InlineKeyboardButton(text="⬅️ К типу тренировки", callback_data="manualworkout:back:type")],
         ]
     )
 
@@ -69,6 +70,7 @@ def drink_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="💧 Вода / zero / почти без ккал", callback_data="drink:plain")],
             [InlineKeyboardButton(text="☕ С калориями / добавками", callback_data="drink:caloric")],
             [InlineKeyboardButton(text="⚡ Энергетик", callback_data="drink:energy")],
+            [InlineKeyboardButton(text="⬅️ К еде", callback_data="food:menu")],
         ]
     )
 
@@ -159,7 +161,7 @@ def scroll_item_menu(scroll_id: str, status: str, favorite: bool) -> InlineKeybo
         rows.append([InlineKeyboardButton(text="✅ Отметить как сгенерированный", callback_data=f"scroll:generated:{scroll_id}")])
     fav_label = "💜 Убрать из любимого" if favorite else "♡ В любимое"
     rows.append([InlineKeyboardButton(text=fav_label, callback_data=f"scroll:favorite:{scroll_id}")])
-    rows.append([InlineKeyboardButton(text="⬅️ В гардероб", callback_data="wardrobe:menu")])
+    rows.append([InlineKeyboardButton(text="⬅️ К свиткам", callback_data="wardrobe:list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

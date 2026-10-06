@@ -10,7 +10,7 @@ from app.keyboards import tori_chat_menu, tori_chat_stop_menu
 from app.services.achievements import achievement_messages, check_achievements
 from app.services.ai_engine import ai_enabled, generate_tori_reply
 from app.services.ai_features import build_ai_context, reserve_ai_call
-from app.services.assets import send_reaction
+from app.services.assets import replace_reaction, replace_text_view, send_reaction
 from app.services.rewards import get_or_create_profile
 from app.services.story import tori_bond_label
 from app.services.tori import (
@@ -119,7 +119,7 @@ async def open_tori(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "torichat:help")
 async def tori_help(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer(TORI_BOND_HELP, reply_markup=tori_chat_menu())
+    await replace_text_view(callback.message, TORI_BOND_HELP, reply_markup=tori_chat_menu())
 
 
 @router.callback_query(F.data.startswith("torichat:action:"))
@@ -137,7 +137,7 @@ async def tori_action(callback: CallbackQuery) -> None:
 async def start_tori_free(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(FreeToriChatState.talking)
     await callback.answer()
-    await send_reaction(
+    await replace_reaction(
         callback.message,
         "tori",
         "curious",
@@ -150,7 +150,13 @@ async def start_tori_free(callback: CallbackQuery, state: FSMContext) -> None:
 async def stop_tori_free(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
-    await send_reaction(callback.message, "tori", "happy", "Тори ещё немного крутится рядом, а потом убегает по своим крайне важным лисьим делам.", reply_markup=tori_chat_menu())
+    await replace_reaction(
+        callback.message,
+        "tori",
+        "happy",
+        "Тори ещё немного крутится рядом, а потом убегает по своим крайне важным лисьим делам.",
+        reply_markup=tori_chat_menu(),
+    )
 
 
 @router.message(FreeToriChatState.talking, F.text)

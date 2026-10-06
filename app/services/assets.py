@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, Message
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import FSInputFile, InputMediaPhoto, Message
 
 ASSET_ROOT = Path(__file__).resolve().parents[1] / "assets"
 
@@ -166,6 +167,98 @@ async def send_background(
     else:
         await message.answer_photo(FSInputFile(path))
         await message.answer(caption, reply_markup=reply_markup)
+
+
+async def replace_text_view(message: Message, text: str, *, reply_markup=None) -> Message | None:
+    """Replace a bot UI message in place whenever Telegram allows it.
+
+    Inline navigation should feel like one screen instead of leaving a trail of
+    menu messages. Media messages keep their current image and update caption;
+    plain messages update text. If Telegram cannot edit the old message, the
+    helper removes it and sends a replacement.
+    """
+    try:
+        if message.photo:
+            if len(text) <= 1000:
+                return await message.edit_caption(caption=text, reply_markup=reply_markup)
+            await message.delete()
+            return await message.answer(text, reply_markup=reply_markup)
+        return await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return message
+    except Exception as exc:
+        print("UI text replace error:", repr(exc))
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    return await message.answer(text, reply_markup=reply_markup)
+
+
+async def replace_photo_view(message: Message, photo, caption: str, *, reply_markup=None) -> Message | None:
+    """Replace the current UI screen with a photo/caption screen."""
+    if len(caption) > 1000:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.answer_photo(photo)
+        return await message.answer(caption, reply_markup=reply_markup)
+
+    try:
+        if message.photo:
+            media = InputMediaPhoto(media=photo, caption=caption)
+            return await message.edit_media(media=media, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            try:
+                await message.edit_reply_markup(reply_markup=reply_markup)
+            except Exception:
+                pass
+            return message
+    except Exception as exc:
+        print("UI photo replace error:", repr(exc))
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    return await message.answer_photo(photo, caption=caption, reply_markup=reply_markup)
+
+
+async def replace_background(
+    message: Message,
+    name: str,
+    caption: str,
+    *,
+    reply_markup=None,
+) -> Message | None:
+    relative = BACKGROUND_ASSETS.get(name)
+    if not relative:
+        return await replace_text_view(message, caption, reply_markup=reply_markup)
+    path = _asset_path(relative)
+    if not path.exists():
+        return await replace_text_view(message, caption, reply_markup=reply_markup)
+    return await replace_photo_view(message, FSInputFile(path), caption, reply_markup=reply_markup)
+
+
+async def replace_reaction(
+    message: Message,
+    character: str,
+    emotion: str,
+    caption: str,
+    *,
+    reply_markup=None,
+) -> Message | None:
+    relative = _reaction_relative(character, emotion)
+    if not relative:
+        return await replace_text_view(message, caption, reply_markup=reply_markup)
+    path = _asset_path(relative)
+    if not path.exists():
+        return await replace_text_view(message, caption, reply_markup=reply_markup)
+    return await replace_photo_view(message, FSInputFile(path), caption, reply_markup=reply_markup)
 
 
 # Aliases for possible future handlers.

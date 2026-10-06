@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from app.config import settings
@@ -19,7 +19,12 @@ from app.keyboards import (
     wardrobe_menu,
 )
 from app.models import ScrollDefinition, ScrollGeneration, ScrollInventory
-from app.services.assets import send_reaction
+from app.services.assets import (
+    replace_background,
+    replace_photo_view,
+    replace_text_view,
+    send_reaction,
+)
 from app.services.gacha import open_trial_chest
 from app.services.phrases import CHEST_RARITY_REACTIONS, pick
 from app.services.rewards import get_or_create_profile
@@ -51,7 +56,14 @@ async def _primary_generation(session, user_id: int, scroll_id: str) -> ScrollGe
     )
 
 
-async def _send_scroll_card(callback: CallbackQuery, user_id: int, inv: ScrollInventory, scroll: ScrollDefinition) -> None:
+async def _send_scroll_card(
+    callback: CallbackQuery,
+    user_id: int,
+    inv: ScrollInventory,
+    scroll: ScrollDefinition,
+    *,
+    replace_current: bool = True,
+) -> None:
     status_names = {"sealed": "запечатан", "revealed": "раскрыт", "generated": "сгенерирован"}
     favorite = " · 💜" if inv.is_favorite else ""
     text = (
@@ -64,24 +76,39 @@ async def _send_scroll_card(callback: CallbackQuery, user_id: int, inv: ScrollIn
     async with SessionLocal() as session:
         primary = await _primary_generation(session, user_id, scroll.id)
 
-    if primary:
+    markup = scroll_item_menu(scroll.id, inv.status, inv.is_favorite)
+    if replace_current:
+        if primary:
+            await replace_photo_view(
+                callback.message,
+                primary.telegram_file_id,
+                text,
+                reply_markup=markup,
+            )
+        else:
+            await replace_background(
+                callback.message,
+                "atelier_wardrobe",
+                text,
+                reply_markup=markup,
+            )
+    elif primary:
         await callback.message.answer_photo(
             primary.telegram_file_id,
             caption=text,
-            reply_markup=scroll_item_menu(scroll.id, inv.status, inv.is_favorite),
+            reply_markup=markup,
         )
     else:
-        await callback.message.answer(
-            text,
-            reply_markup=scroll_item_menu(scroll.id, inv.status, inv.is_favorite),
-        )
+        await callback.message.answer(text, reply_markup=markup)
 
 
 async def _send_wardrobe_menu(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
         await session.commit()
-    await callback.message.answer(
+    await replace_background(
+        callback.message,
+        "atelier_wardrobe",
         f"Сундуки испытания: {profile.trial_chests}\n"
         f"Монеты: {profile.coins}\n"
         f"Пыль ателье: {profile.atelier_dust}",
@@ -131,8 +158,8 @@ async def chest_open(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data == "wardrobe:list")
-async def wardrobe_list(callback: CallbackQuery) -> None:
+async def _show_wardrobe_list(callback: CallbackQuery, page: int = 0) -> None:
+    page_size = 8
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
         rows = (
@@ -143,22 +170,60 @@ async def wardrobe_list(callback: CallbackQuery) -> None:
                 .order_by(ScrollInventory.is_favorite.desc(), ScrollInventory.obtained_at.desc())
             )
         ).all()
-        user_id = profile.id
         await session.commit()
 
     if not rows:
-        await callback.message.answer(
+        await replace_background(
+            callback.message,
+            "atelier_wardrobe",
             "Пока ни одного свитка.",
             reply_markup=back_menu("wardrobe:menu", "⬅️ В гардероб"),
         )
-        await callback.answer()
         return
 
-    await callback.message.answer(f"Гардероб Селин: {len(rows)} свитков.")
-    for inv, scroll in rows[:20]:
-        await _send_scroll_card(callback, user_id, inv, scroll)
-    if len(rows) > 20:
-        await callback.message.answer("Показываю последние 20, чтобы не устроить свиткопад в чате.")
+    total_pages = max(1, (len(rows) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    chunk = rows[page * page_size:(page + 1) * page_size]
+
+    buttons = []
+    for inv, scroll in chunk:
+        fav = "💜 " if inv.is_favorite else ""
+        label = f"{fav}{scroll.rarity.title()} · {get_scroll_target(scroll)} · {scroll.name}"
+        if len(label) > 58:
+            label = label[:57].rstrip() + "…"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"scroll:open:{scroll.id}")])
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"wardrobe:listpage:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"wardrobe:listpage:{page + 1}"))
+        buttons.append(nav)
+
+    buttons.append([InlineKeyboardButton(text="⬅️ В гардероб", callback_data="wardrobe:menu")])
+    await replace_background(
+        callback.message,
+        "atelier_wardrobe",
+        f"📚 Мои свитки: {len(rows)}\nВыбери свиток — список не будет разрастаться отдельными сообщениями.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@router.callback_query(F.data == "wardrobe:list")
+async def wardrobe_list(callback: CallbackQuery) -> None:
+    await _show_wardrobe_list(callback, 0)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("wardrobe:listpage:"))
+async def wardrobe_list_page(callback: CallbackQuery) -> None:
+    try:
+        page = int(callback.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        page = 0
+    await _show_wardrobe_list(callback, page)
     await callback.answer()
 
 
@@ -231,7 +296,8 @@ async def show_scroll(callback: CallbackQuery) -> None:
             return
         await session.commit()
     target = get_scroll_target(scroll)
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         f"🎨 Промпт для генерации: {target}\n\n"
         f"{scroll.prompt}",
         reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ К свитку"),
@@ -282,7 +348,8 @@ async def add_scroll_image(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ScrollImageState.waiting_photo)
     await state.update_data(scroll_id=scroll_id)
     target = get_scroll_target(scroll)
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         f"🖼 Отправь результат генерации для: {target}\n"
         f"Свиток: «{scroll.name}»",
         reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ Отмена"),
@@ -414,7 +481,8 @@ async def atelier_shop(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
         await session.commit()
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         "Ателье продаёт запечатанный свиток из своей коллекции. Что внутри — заранее не видно.",
         reply_markup=atelier_shop_menu(profile.coins),
     )
@@ -456,7 +524,8 @@ async def dust_shop(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
         await session.commit()
-    await callback.message.answer(
+    await replace_text_view(
+        callback.message,
         "Пыль ателье собирается из дубликатов. Её можно обменять на новый гарантированно незнакомый свиток.",
         reply_markup=dust_shop_menu(profile.atelier_dust),
     )
