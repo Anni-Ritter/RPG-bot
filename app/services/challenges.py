@@ -278,7 +278,7 @@ def progress_text(code: str, current: int, target: int, *, final: bool = False) 
     if code == "workout":
         return f"{current} / {target} мин тренировки"
     if code == "water":
-        return f"{current} / {target} отметок воды"
+        return f"{current} / {target} отметок гидратации"
     if code == "meals":
         return f"{current} / {target} полноценных приёмов пищи"
     if code == "food_logs":

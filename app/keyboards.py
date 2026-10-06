@@ -8,8 +8,8 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="🏋️ Тренировка")],
             [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
             [KeyboardButton(text="📖 История"), KeyboardButton(text="💬 Селин")],
-            [KeyboardButton(text="📷 Анализ фото"), KeyboardButton(text="🎯 Челлендж")],
-            [KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="🦊 Тори"), KeyboardButton(text="📷 Анализ фото")],
+            [KeyboardButton(text="🎯 Челлендж"), KeyboardButton(text="🏆 Ачивки")],
         ],
         resize_keyboard=True,
     )
@@ -56,12 +56,9 @@ def food_menu() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🍰 Вкусняшка", callback_data="food:treat"),
-                InlineKeyboardButton(text="☕ Напиток", callback_data="food:drink"),
+                InlineKeyboardButton(text="🥤 Напиток / гидратация", callback_data="food:drink"),
             ],
-            [
-                InlineKeyboardButton(text="💧 Вода", callback_data="food:water"),
-                InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation"),
-            ],
+            [InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation")],
         ]
     )
 
@@ -69,8 +66,8 @@ def food_menu() -> InlineKeyboardMarkup:
 def drink_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Без существенных добавок", callback_data="drink:plain")],
-            [InlineKeyboardButton(text="С молоком / сахаром / сиропом", callback_data="drink:caloric")],
+            [InlineKeyboardButton(text="💧 Вода / zero / почти без ккал", callback_data="drink:plain")],
+            [InlineKeyboardButton(text="☕ С калориями / добавками", callback_data="drink:caloric")],
             [InlineKeyboardButton(text="⚡ Энергетик", callback_data="drink:energy")],
         ]
     )
@@ -288,6 +285,26 @@ def tori_autonomous_menu(notification_id: int, choices: list[dict]) -> InlineKey
         ]
     )
 
+
+
+def tori_chat_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🤍 Погладить", callback_data="torichat:action:pet"),
+                InlineKeyboardButton(text="🎾 Поиграть", callback_data="torichat:action:play"),
+            ],
+            [InlineKeyboardButton(text="🦊 Позвать к себе", callback_data="torichat:action:call")],
+            [InlineKeyboardButton(text="✨ Свободное взаимодействие", callback_data="torichat:free")],
+            [InlineKeyboardButton(text="❔ Как повышать связь", callback_data="torichat:help")],
+        ]
+    )
+
+
+def tori_chat_stop_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🛑 Закончить", callback_data="torichat:stop")]]
+    )
 
 def photo_kind_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

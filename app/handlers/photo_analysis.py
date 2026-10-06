@@ -38,6 +38,7 @@ from app.services.self_workouts import (
     reward_for_minutes,
 )
 from app.services.steps import evaluate_steps
+from app.services.hydration import record_hydration
 
 router = Router()
 TZ = ZoneInfo(settings.timezone)
@@ -97,6 +98,17 @@ async def _edit_flow_message(message: Message, state: FSMContext, text: str, *, 
                 return
         except Exception:
             pass
+    await _send_flow_message(message, state, text, reply_markup=reply_markup)
+
+
+async def _move_flow_message_below_user(message: Message, state: FSMContext, text: str, *, reply_markup=None) -> None:
+    """Recreate the single wizard message after the newest user photo/comment.
+
+    Editing the old prompt keeps it chronologically above the photo that was just
+    sent, which is easy to miss on mobile. Delete the old prompt and recreate one
+    control message below the user's latest content.
+    """
+    await _delete_flow_message(message, state)
     await _send_flow_message(message, state, text, reply_markup=reply_markup)
 
 
@@ -176,7 +188,7 @@ async def _finalize_media_group(key: tuple[int, int, str]) -> None:
             selected_kind="food",
         )
         await state.set_state(PhotoAnalyzeState.waiting_kind)
-        await _edit_flow_message(
+        await _move_flow_message_below_user(
             message,
             state,
             f"В одной порции собрано {len(existing)} фото. Можно сразу считать или добавить комментарий к составу/весу.",
@@ -193,7 +205,7 @@ async def _finalize_media_group(key: tuple[int, int, str]) -> None:
         food_comment=comment,
     )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
-    await _edit_flow_message(
+    await _move_flow_message_below_user(
         message,
         state,
         f"Что на изображениях? В наборе {len(new_ids)} фото.",
@@ -217,6 +229,7 @@ async def _queue_media_group(message: Message, state: FSMContext, *, mode: str) 
                 "task": None,
             }
             _media_groups[key] = payload
+        payload["message"] = message  # keep the last album item so controls appear below the album
         payload["file_ids"].append(message.photo[-1].file_id)
         if message.caption:
             payload["captions"].append(message.caption)
@@ -451,7 +464,7 @@ async def photo_received_after_prompt(message: Message, state: FSMContext) -> No
         food_comment=(message.caption or "").strip(),
     )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
-    await _edit_flow_message(message, state, "Что на изображении?", reply_markup=photo_kind_menu())
+    await _move_flow_message_below_user(message, state, "Что на изображении?", reply_markup=photo_kind_menu())
 
 
 @router.message(PhotoAnalyzeState.waiting_more_food_photo, F.photo)
@@ -488,7 +501,7 @@ async def more_food_photo_received(message: Message, state: FSMContext) -> None:
         food_comment=comment,
     )
     await state.set_state(PhotoAnalyzeState.waiting_kind)
-    await _edit_flow_message(
+    await _move_flow_message_below_user(
         message,
         state,
         f"В одной порции собрано {len(file_ids)} фото. Можно считать или добавить комментарий.",
@@ -510,7 +523,7 @@ async def food_comment_received(message: Message, state: FSMContext) -> None:
     await state.update_data(food_comment=comment, selected_kind="food")
     await state.set_state(PhotoAnalyzeState.waiting_kind)
     count = len(data.get("photo_file_ids") or [])
-    await _edit_flow_message(
+    await _move_flow_message_below_user(
         message,
         state,
         "Комментарий сохранила. Он будет важнее моих догадок по фото.",
@@ -528,7 +541,7 @@ async def food_comment_without_button(message: Message, state: FSMContext) -> No
         return
     await state.update_data(food_comment=comment)
     count = len(data.get("photo_file_ids") or [])
-    await _edit_flow_message(
+    await _move_flow_message_below_user(
         message,
         state,
         "Приняла это как комментарий к еде.",
@@ -582,14 +595,14 @@ async def unsolicited_photo(message: Message, state: FSMContext) -> None:
             markup = food_photo_prepare_menu(
                 len(existing), has_comment=bool(comment), max_photos=MAX_FOOD_PHOTOS
             )
-            await _edit_flow_message(
+            await _move_flow_message_below_user(
                 message,
                 state,
                 f"В одной порции собрано {len(existing)} фото. Можно считать или добавить комментарий.",
                 reply_markup=markup,
             )
         else:
-            await _edit_flow_message(
+            await _move_flow_message_below_user(
                 message,
                 state,
                 f"Добавила ещё фото ({len(existing)}). Если это еда — проанализирую их вместе.",
@@ -839,16 +852,21 @@ async def _record_food_choice(
             drink_kind = result.get("drink_kind")
             if drink_kind == "plain":
                 stat.plain_drinks += 1
+                hydration_rewarded = await record_hydration(
+                    session, profile, stat, source="photo_plain_drink"
+                )
+                if hydration_rewarded:
+                    reward_text = "+3 XP · +1 связь с Тори за гидратацию"
             elif drink_kind == "energy":
                 stat.energy_drinks += 1
+                await apply_reward(
+                    session, profile, event_type="drink_ai", payload={**payload, "kind": drink_kind}
+                )
             else:
                 stat.caloric_drinks += 1
-            await apply_reward(
-                session,
-                profile,
-                event_type="drink_ai",
-                payload={**payload, "kind": drink_kind},
-            )
+                await apply_reward(
+                    session, profile, event_type="drink_ai", payload={**payload, "kind": drink_kind}
+                )
 
         await record_food_nutrition(
             session,

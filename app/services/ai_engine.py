@@ -172,6 +172,17 @@ CHALLENGE_SCHEMA = {
     "additionalProperties": False,
 }
 
+TORI_CHAT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "emotion": {"type": "string", "enum": TORI_EMOTIONS},
+    },
+    "required": ["text", "emotion"],
+    "additionalProperties": False,
+}
+
+
 EVENING_REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
@@ -237,7 +248,7 @@ def _selin_system(context: dict[str, Any], *, can_offer_quest: bool) -> str:
 - связь с Тори: {context['tori_bond']}
 - отношение Селин: {context['selin_relation']}
 - текущая сюжетная цель: {context['objective']}
-- сегодня: {context['steps']} шагов, еда {context['meals']}, перекусы {context['snacks']}, вкусняшки {context['treats_logged']}, вода {context['water']}, напитки {context['drinks']}
+- сегодня: {context['steps']} шагов, еда {context['meals']}, перекусы {context['snacks']}, вкусняшки {context['treats_logged']}, гидратация {context['water']}, напитки {context['drinks']}
 - КБЖУ по распознанным сегодня: {context['nutrition_calories']} ккал, Б {context['nutrition_protein']}, Ж {context['nutrition_fat']}, У {context['nutrition_carbs']} ({context['nutrition_count']} записей)
 - ориентир по энергии: около {context.get('calorie_target_kcal', 1500)} ккал; отклонение по известным записям {context.get('calorie_delta_kcal', 0):+d} ккал
 
@@ -255,7 +266,7 @@ def _selin_system(context: dict[str, Any], *, can_offer_quest: bool) -> str:
 Иногда (не в каждом ответе) можно добавить отдельную реакцию Тори. Тори не разговаривает словами: только короткое понятное действие или эмоция.
 Если Тори не нужен, show_tori=false, tori_text="", tori_emotion="neutral".
 
-Если предлагаешь задание, оно должно быть небольшим и выполнимым сегодня: прогулка, разумная домашняя тренировка, растяжка, вода, приготовить/съесть нормальную еду, бытовое дело или короткая полезная активность.
+Если предлагаешь задание, оно должно быть небольшим и выполнимым сегодня: прогулка, разумная домашняя тренировка, растяжка, гидратация, приготовить/съесть нормальную еду, бытовое дело или короткая полезная активность.
 Никогда не предлагай пропуск еды, голодание, жёсткое ограничение калорий, компенсацию еды тренировкой, наказание физической нагрузкой или чрезмерную тренировку.
 
 ПАМЯТЬ: поле memories_to_save используй только для 0–2 реально полезных устойчивых фактов, которые пользователь прямо сообщил о себе.
@@ -330,6 +341,26 @@ async def generate_selin_reply(
     )
 
 
+async def generate_tori_reply(*, user_action: str, context: dict[str, Any]) -> dict:
+    system = f"""
+Ты управляешь поведением Тори — маленького лисьего фамильяра из личной фэнтези-RPG.
+Пиши по-русски обычным живым языком, 1–3 коротких предложения.
+Тори НЕ разговаривает человеческой речью, не пишет реплики в кавычках и не объясняет мысли словами. Только понятное действие, звук, мимика, жест или реакция.
+Он любопытный, наглый, сообразительный, любит внимание и постепенно привязывается к Проводнику.
+Не пиши литературной прозой и не придумывай новый канон, тайны мира или прошлое персонажей.
+Текущая связь с Тори: {context['tori_bond']}. День истории: {context['story_day']}.
+Что уже известно о Проводнике: {context.get('memories') or 'пока почти ничего'}.
+""".strip()
+    prompt = f"Проводник взаимодействует с Тори так: {user_action}\nОтветь только поведением Тори."
+    return await _structured_response(
+        system=system,
+        user_content=prompt,
+        schema_name="tori_interaction_v13",
+        schema=TORI_CHAT_SCHEMA,
+        max_tokens=220,
+    )
+
+
 async def generate_selin_initiative(*, context: dict[str, Any], can_offer_quest: bool) -> dict:
     system = _selin_system(context, can_offer_quest=can_offer_quest)
     prompt = (
@@ -370,6 +401,7 @@ async def analyze_food_images(
 8. reference_grams — вес, к которому относятся итоговые calories/protein/fat/carbs. Если итог — целое блюдо из нескольких компонентов и общий вес неизвестен, можно оставить null.
 9. Поля per_100g_* заполняй только когда весь итог действительно относится к одному продукту/одной однородной смеси и это надёжно известно. Для сборного блюда из нескольких упаковок обычно оставляй null.
 10. category=meal для обычного полноценного приёма пищи, snack для небольшого перекуса, treat для десерта/конфет/выпечки/чипсов/сладкой вкусняшки или похожего продукта, drink для напитка. Treat — нейтральная игровая категория, не моральная оценка.
+10а. Для category=drink ставь drink_kind=plain для воды, zero/без сахара и очень низкокалорийных напитков (ориентир до ~5 ккал на 100 мл); caloric — для заметно калорийных напитков; energy — для энергетиков.
 11. Если данных недостаточно, честно понизь confidence и объясни, чего не хватает.
 12. Никаких медицинских выводов и никаких советов «компенсировать» еду тренировкой.
 
@@ -435,7 +467,7 @@ async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str
 Челлендж должен быть конкретным, измеримым существующими данными бота и добровольным. За провал нет штрафа — просто нет награды.
 Разрешённые code и смысл:
 - steps: шаги, target 5000/7000/9000/12000
-- water: отметки воды, target 2/3/4
+- water: отметки гидратации (вода, zero/почти некалорийный напиток), target 2/3/4
 - meals: полноценные приёмы пищи, target 2/3
 - workout: минуты одной/нескольких тренировок сегодня, target 10/20/30/45
 - food_logs: количество записанных через фото приёмов/продуктов, target 2/3/4
@@ -448,7 +480,7 @@ async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str
 """.strip()
     prompt = f"""
 Состояние сегодня:
-шаги {context['steps']}, вода {context['water']}, полноценная еда {context['meals']}, перекусы {context['snacks']}, вкусняшки {context['treats_logged']}, энергетики {context['energy_drinks']}.
+шаги {context['steps']}, гидратация {context['water']}, полноценная еда {context['meals']}, перекусы {context['snacks']}, вкусняшки {context['treats_logged']}, энергетики {context['energy_drinks']}.
 Синхронизация {context['level']} уровня. Сегодня день истории {context['story_day']}.
 Ориентир по энергии: около {context.get('calorie_target_kcal', 1500)} ккал в день. Не делай из точного попадания в калории самостоятельный челлендж.
 Правила тренера: {coach_rules or 'нет отдельных правил'}
@@ -497,7 +529,7 @@ async def generate_evening_nutrition_review(
 - полноценные приёмы пищи: {context['meals']}
 - перекусы: {context['snacks']}
 - вкусняшки: {context['treats_logged']}
-- вода: {context['water']}
+- гидратация: {context['water']}
 - напитки: {context['drinks']}, энергетики: {context['energy_drinks']}
 - известное КБЖУ: {context['nutrition_calories']} ккал; Б {context['nutrition_protein']} г; Ж {context['nutrition_fat']} г; У {context['nutrition_carbs']} г
 - калорийный ориентир: около {context.get('calorie_target_kcal', 1500)} ккал

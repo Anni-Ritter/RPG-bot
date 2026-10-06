@@ -30,6 +30,7 @@ from app.services.phrases import (
 )
 from app.services.rewards import apply_reward, get_or_create_daily, get_or_create_profile
 from app.services.steps import evaluate_steps
+from app.services.hydration import record_hydration
 from app.services.self_workouts import weekly_workout_summary
 from app.services.challenges import challenge_dashboard_line, get_plan
 from app.services.story import (
@@ -147,8 +148,8 @@ async def today(message: Message) -> None:
             f"🎯 Текущая сюжетная задача:\n{objective}\n\n"
             f"Сегодня:\n"
             f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks} · 🍰 Вкусняшки: {treats}\n"
-            f"☕ Напитки: {stat.drinks} · ⚡ Энергетики: {stat.energy_drinks}\n"
-            f"💧 Вода: {stat.water} · 🚶 Шаги: {stat.steps:,}{nutrition_line}\n"
+            f"🥤 Напитки: {stat.drinks} · 💧 Гидратация: {stat.water} · ⚡ Энергетики: {stat.energy_drinks}\n"
+            f"🚶 Шаги: {stat.steps:,}{nutrition_line}\n"
             f"🏋️ Тренировки за неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
             f"Ателье: {profile.coins} монет · {profile.atelier_dust} Пыли · {profile.trial_chests} сундуков"
         ).replace(",", " "),
@@ -198,16 +199,17 @@ async def meal(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "food:water")
 async def water(callback: CallbackQuery) -> None:
+    # Legacy button from old messages. From V13 water is part of the unified
+    # hydration/drink flow, but stale inline keyboards should still work.
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
         stat = await get_or_create_daily(session, profile.id, now_local().date())
-        stat.water += 1
-        rewarded = stat.water <= 3
-        if rewarded:
-            await apply_reward(session, profile, event_type="water", xp=3, bond=1)
+        stat.drinks += 1
+        stat.plain_drinks += 1
+        rewarded = await record_hydration(session, profile, stat, source="manual_water_legacy")
         unlocked = await check_achievements(session, profile)
         await session.commit()
-    suffix = "\n+3 XP · +1 связь с Тори" if rewarded else "\nСегодняшний лимит награды за воду уже закрыт."
+    suffix = "\n+3 XP · +1 связь с Тори" if rewarded else "\nНаграда за гидратацию на сегодня уже закрыта, но отметку я сохранила."
     await send_reaction(callback.message, "tori", "happy", pick(WATER_REACTIONS) + suffix)
     for text in achievement_messages(unlocked):
         await callback.message.answer(text)
@@ -251,7 +253,10 @@ async def treat(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "food:drink")
 async def drink(callback: CallbackQuery) -> None:
-    await callback.message.answer("Какой напиток?", reply_markup=drink_menu())
+    await callback.message.answer(
+        "Что пьём? Вода, zero-тоник, чай/кофе без заметных добавок и другие почти некалорийные напитки считаются гидратацией.",
+        reply_markup=drink_menu(),
+    )
     await callback.answer()
 
 
@@ -262,15 +267,25 @@ async def drink_type(callback: CallbackQuery) -> None:
         profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
         stat = await get_or_create_daily(session, profile.id, now_local().date())
         stat.drinks += 1
+        rewarded_hydration = False
         if kind == "plain":
             stat.plain_drinks += 1
+            rewarded_hydration = await record_hydration(session, profile, stat, source="manual_plain_drink")
         elif kind == "caloric":
             stat.caloric_drinks += 1
+            await apply_reward(session, profile, event_type="drink", payload={"kind": kind})
         elif kind == "energy":
             stat.energy_drinks += 1
-        await apply_reward(session, profile, event_type="drink", payload={"kind": kind})
+            await apply_reward(session, profile, event_type="drink", payload={"kind": kind})
+        unlocked = await check_achievements(session, profile)
         await session.commit()
-    await callback.message.answer(pick(DRINK_REACTIONS))
+    if kind == "plain":
+        suffix = "\n+3 XP · +1 связь с Тори" if rewarded_hydration else "\nГидратацию записала; награда за первые три отметки дня уже закрыта."
+        await send_reaction(callback.message, "tori", "happy", pick(WATER_REACTIONS) + suffix)
+    else:
+        await callback.message.answer(pick(DRINK_REACTIONS))
+    for text in achievement_messages(unlocked):
+        await callback.message.answer(text)
     await callback.answer()
 
 

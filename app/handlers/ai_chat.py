@@ -26,6 +26,7 @@ from app.services.ai_features import (
 from app.services.assets import send_reaction
 from app.services.dialogue import get_tori_autonomous_response
 from app.services.rewards import get_or_create_profile
+from app.services.tori import reward_tori_interaction
 from app.services.story import advance_week1_if_due, get_or_create_story_progress, initialize_week1_v2, selin_chat_gate
 
 router = Router()
@@ -41,7 +42,7 @@ class InitiativeSelinChatState(StatesGroup):
 
 NAVIGATION_TEXTS = {
     "📊 Сегодня", "🚶 Шаги", "🍽 Еда", "🏋️ Тренировка", "📜 Квесты",
-    "🎁 Гардероб", "📖 История", "💬 Селин", "🏆 Ачивки", "📷 Анализ фото", "🎯 Челлендж",
+    "🎁 Гардероб", "📖 История", "💬 Селин", "🦊 Тори", "🏆 Ачивки", "📷 Анализ фото", "🎯 Челлендж",
 }
 
 
@@ -457,9 +458,14 @@ async def react_to_tori_event(callback: CallbackQuery) -> None:
         payload["status"] = "resolved"
         payload["choice"] = choice_id
         notification.payload = payload
+        bond_rewarded = await reward_tori_interaction(
+            session, profile, source=f"event:{notification.id}"
+        )
         await session.commit()
 
     emotion, text = response
+    if bond_rewarded:
+        text += "\n\n+1 связь с Тори"
     await callback.answer()
     await send_reaction(callback.message, "tori", emotion, text)
 
