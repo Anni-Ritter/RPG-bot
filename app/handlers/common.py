@@ -31,6 +31,7 @@ from app.services.phrases import (
 from app.services.rewards import apply_reward, get_or_create_daily, get_or_create_profile
 from app.services.steps import evaluate_steps
 from app.services.hydration import record_hydration
+from app.services.intraday_coach import create_intraday_food_feedback
 from app.services.self_workouts import weekly_workout_summary
 from app.services.challenges import challenge_dashboard_line, get_plan
 from app.services.challenge_feedback import check_and_notify_challenges
@@ -46,6 +47,21 @@ TZ = ZoneInfo(settings.timezone)
 
 def now_local() -> datetime:
     return datetime.now(TZ)
+
+
+async def _send_intraday_food_advice(message: Message, user_id: int, full_name: str | None, latest_action: str) -> None:
+    advice = await create_intraday_food_feedback(
+        user_id,
+        full_name,
+        latest_action=latest_action,
+    )
+    if advice:
+        await send_reaction(
+            message,
+            "selin",
+            advice.get("emotion", "neutral"),
+            "🧭 Корректировка маршрута\n\n" + advice["text"],
+        )
 
 
 class StepState(StatesGroup):
@@ -194,6 +210,10 @@ async def meal(callback: CallbackQuery) -> None:
     suffix = "\n+20 XP · +3 монеты" if rewarded else "\nЛимит награды за еду на сегодня уже достигнут."
     await send_reaction(callback.message, "tori", "curious", pick(MEAL_REACTIONS) + suffix)
     await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
+    await _send_intraday_food_advice(
+        callback.message, callback.from_user.id, callback.from_user.full_name,
+        "Отмечен полноценный приём пищи вручную, без подробного КБЖУ.",
+    )
     for text in achievement_messages(unlocked):
         await callback.message.answer(text)
     await callback.answer()
@@ -229,6 +249,10 @@ async def snack(callback: CallbackQuery) -> None:
         await apply_reward(session, profile, event_type="snack", payload={"count_today": count})
         await session.commit()
     await send_reaction(callback.message, "tori", "judging" if count >= 3 else "curious", snack_reaction(count))
+    await _send_intraday_food_advice(
+        callback.message, callback.from_user.id, callback.from_user.full_name,
+        f"Отмечен перекус вручную. Это перекус №{count} за сегодня; точного КБЖУ для него нет.",
+    )
     await callback.answer()
 
 
@@ -250,6 +274,10 @@ async def treat(callback: CallbackQuery) -> None:
         "selin",
         "neutral",
         "— Записала как вкусняшку. Никаких штрафов; просто челленджи и вечерний разбор теперь видят её отдельно.",
+    )
+    await _send_intraday_food_advice(
+        callback.message, callback.from_user.id, callback.from_user.full_name,
+        "Отмечена вкусняшка вручную. Точного КБЖУ для неё нет, поэтому не придумывай калорийность; ориентируйся на структуру дня и число вкусняшек.",
     )
     await callback.answer()
 
@@ -294,6 +322,10 @@ async def drink_type(callback: CallbackQuery) -> None:
         await send_reaction(callback.message, "tori", "happy", pick(WATER_REACTIONS) + suffix)
     else:
         await callback.message.answer(pick(DRINK_REACTIONS))
+        await _send_intraday_food_advice(
+            callback.message, callback.from_user.id, callback.from_user.full_name,
+            "Отмечен калорийный напиток вручную." if kind == "caloric" else "Отмечен энергетик вручную. Точного КБЖУ нет.",
+        )
     await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for text in achievement_messages(unlocked):
         await callback.message.answer(text)

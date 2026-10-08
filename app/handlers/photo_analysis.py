@@ -40,6 +40,7 @@ from app.services.self_workouts import (
 )
 from app.services.steps import evaluate_steps
 from app.services.hydration import record_hydration
+from app.services.intraday_coach import create_intraday_food_feedback
 
 router = Router()
 TZ = ZoneInfo(settings.timezone)
@@ -952,6 +953,18 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
     if text:
         await _finish_result_message(callback.message, text)
         await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
+        advice = await create_intraday_food_feedback(
+            callback.from_user.id,
+            callback.from_user.full_name,
+            latest_action="Записана новая порция еды или напитка через фото. Оцени, нужно ли скорректировать оставшуюся часть дня.",
+        )
+        if advice:
+            await send_reaction(
+                callback.message,
+                "selin",
+                advice.get("emotion", "neutral"),
+                "🧭 Корректировка маршрута\n\n" + advice["text"],
+            )
     await state.clear()
 
 
@@ -983,6 +996,18 @@ async def accept_food_grams(message: Message, state: FSMContext) -> None:
     if text:
         await send_reaction(message, "selin", "smirk", text)
         await check_and_notify_challenges(message, message.from_user.id, message.from_user.full_name)
+        advice = await create_intraday_food_feedback(
+            message.from_user.id,
+            message.from_user.full_name,
+            latest_action="Записана порция еды или напитка через фото с указанным весом. Оцени, нужно ли скорректировать оставшуюся часть дня.",
+        )
+        if advice:
+            await send_reaction(
+                message,
+                "selin",
+                advice.get("emotion", "neutral"),
+                "🧭 Корректировка маршрута\n\n" + advice["text"],
+            )
 
 
 @router.callback_query(F.data.startswith("photoai:activity:accept:"))
