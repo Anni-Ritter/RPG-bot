@@ -12,8 +12,8 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import back_menu, drink_menu, food_menu, main_menu, quest_menu, temptation_menu, wardrobe_menu
-from app.models import CustomQuest, Notification, PendingTemptation, UserAchievement
-from app.services.achievements import achievement_messages, check_achievements
+from app.models import CustomQuest, Notification, PendingTemptation
+from app.services.achievements import achievement_catalog, achievement_catalog_text, achievement_messages, check_achievements
 from app.services.ai_engine import ai_enabled
 from app.services.ai_features import daily_treat_count, get_calorie_target
 from app.services.assets import replace_text_view, send_background, send_reaction, step_reaction_emotion
@@ -177,18 +177,9 @@ async def today(message: Message) -> None:
 async def achievements(message: Message) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
-        rows = list(
-            (await session.scalars(
-                select(UserAchievement)
-                .where(UserAchievement.user_id == profile.id)
-                .order_by(UserAchievement.unlocked_at.desc())
-            )).all()
-        )
+        rows = await achievement_catalog(session, profile)
         await session.commit()
-    if not rows:
-        await message.answer("Пока ни одной ачивки. Они скрыты до момента получения.")
-        return
-    await message.answer("🏆 Ачивки\n\n" + "\n".join(f"• {r.title}" for r in rows))
+    await message.answer(achievement_catalog_text(rows))
 
 
 @router.message(F.text == "🍽 Еда")
