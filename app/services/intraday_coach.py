@@ -70,12 +70,24 @@ async def create_intraday_food_feedback(
     if not allowed:
         return None
 
+    current = now_local()
+    if current.hour < 12:
+        day_phase = "утро"
+    elif current.hour < 17:
+        day_phase = "день"
+    elif current.hour < 21:
+        day_phase = "вечер"
+    else:
+        day_phase = "поздний вечер"
+
     try:
         result = await generate_intraday_nutrition_advice(
             context=context,
             entries_text=_entries_text(rows),
             coach_rules=coach_rules,
             latest_action=latest_action,
+            current_time=current.strftime("%H:%M"),
+            day_phase=day_phase,
         )
     except Exception as exc:
         print("AI intraday nutrition advice error:", repr(exc))
