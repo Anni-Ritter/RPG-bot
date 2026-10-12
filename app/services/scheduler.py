@@ -19,6 +19,7 @@ from app.keyboards import (
     thursday_second_menu,
     workout_start_menu,
 )
+from app.keyboards import challenge_finalize_menu
 from app.models import Notification, PendingTemptation, UserProfile, WorkoutSession
 from app.services.assets import send_reaction_to_chat
 from app.services.ai_engine import ai_enabled, generate_selin_initiative
@@ -389,15 +390,19 @@ async def send_due(bot: Bot) -> None:
                 profile = await session.get(UserProfile, n.user_id)
                 if profile:
                     try:
-                        review, chest, _ = await create_evening_review(session, profile, now.date(), force=True, finalize_challenge=True)
+                        review, chest, _ = await create_evening_review(session, profile, now.date(), force=True, finalize_challenge=False)
                         await session.commit()
                         text = review.text
                         if review.tomorrow_focus:
                             text += f"\n\nНа завтра я бы оставила один фокус: {review.tomorrow_focus}"
-                        if chest:
-                            text += "\n\n✨ Челлендж тоже закрыт, и это третий выполненный — +1 Сундук испытания."
+                        text += (
+                            "\n\n🎯 Челленджи я пока не закрываю. "
+                            "Если что-то забыла отметить — внеси это сейчас. "
+                            "Когда всё будет записано, нажми кнопку ниже."
+                        )
                         await send_reaction_to_chat(
-                            bot, telegram_id, "selin", review.emotion or "neutral", text
+                            bot, telegram_id, "selin", review.emotion or "neutral", text,
+                            reply_markup=challenge_finalize_menu(now.date().isoformat()),
                         )
                     except Exception as exc:
                         print("Evening review send error:", repr(exc))

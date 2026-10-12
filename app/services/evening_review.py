@@ -79,7 +79,7 @@ async def create_evening_review(
             for index in sorted(after_completed - before_completed):
                 if 0 <= index < len(options):
                     newly_completed_titles.append(str(options[index].get("title") or "Испытание"))
-        challenge_text = challenge_summary(plan, challenge_values, final=True)
+        challenge_text = challenge_summary(plan, challenge_values, final=finalize_challenge)
 
     result = None
     if ai_enabled() and await reserve_ai_call(session, profile.id, "review"):

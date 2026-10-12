@@ -340,6 +340,7 @@ def daily_challenge_options_menu(
     accepted: list[int] | None = None,
     completed: list[int] | None = None,
     failed: list[int] | None = None,
+    finalize_day: str | None = None,
 ) -> InlineKeyboardMarkup:
     accepted_set = set(accepted or [])
     completed_set = set(completed or [])
@@ -364,7 +365,26 @@ def daily_challenge_options_menu(
     active_count = len(accepted_set - completed_set - failed_set)
     if active_count:
         rows.append([InlineKeyboardButton(text="✅ Проверить активные", callback_data="challenge:check")])
+        if finalize_day:
+            rows.append([InlineKeyboardButton(text="🌙 Завершить день", callback_data=f"challenge:finalize:{finalize_day}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def challenge_finalize_menu(day_iso: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🌙 Всё внесено — закрыть челленджи", callback_data=f"challenge:finalize:{day_iso}")],
+        ]
+    )
+
+
+def challenge_finalize_confirm_menu(day_iso: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, всё внесено", callback_data=f"challenge:finalize_confirm:{day_iso}")],
+            [InlineKeyboardButton(text="↩️ Ещё не всё", callback_data=f"challenge:finalize_cancel:{day_iso}")],
+        ]
+    )
 
 
 def daily_challenge_active_menu(plan_id: int | None = None) -> InlineKeyboardMarkup:

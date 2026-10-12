@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from app.db import SessionLocal
-from app.keyboards import back_menu
+from app.keyboards import back_menu, challenge_finalize_menu
 from app.services.ai_features import (
     clear_user_memories,
     get_calorie_target,
@@ -138,7 +138,12 @@ async def evening_review_now(message: Message) -> None:
     text = review.text
     if review.tomorrow_focus:
         text += f"\n\nФокус на завтра: {review.tomorrow_focus}"
-    if chest:
-        text += "\n✨ +1 Сундук испытания."
-    await send_reaction(message, "selin", review.emotion or "neutral", text)
+    text += (
+        "\n\n🎯 Челленджи этим разбором не закрываю. "
+        "Если что-то забыла отметить — сначала внеси это, потом заверши день кнопкой ниже."
+    )
+    await send_reaction(
+        message, "selin", review.emotion or "neutral", text,
+        reply_markup=challenge_finalize_menu(now_local().date().isoformat()),
+    )
 

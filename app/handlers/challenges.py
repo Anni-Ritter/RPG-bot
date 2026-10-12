@@ -5,9 +5,11 @@ import asyncio
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
+from datetime import date
 
+from app.config import settings
 from app.db import SessionLocal
-from app.keyboards import daily_challenge_options_menu
+from app.keyboards import daily_challenge_options_menu, challenge_finalize_confirm_menu, challenge_finalize_menu
 from app.models import DailyChallengePlan
 from app.services.challenges import (
     active_indices,
@@ -85,11 +87,21 @@ async def _plan_text_and_markup(session, profile, plan: DailyChallengePlan):
             lines.append("Зачем: " + _trim(option.get("why"), 95))
         lines.append("")
 
+    now = now_local()
+    finalize_day = None
+    if active_indices(plan):
+        if plan.challenge_date < now.date() or (
+            plan.challenge_date == now.date()
+            and (now.hour, now.minute) >= (settings.evening_review_hour, settings.evening_review_minute)
+        ):
+            finalize_day = plan.challenge_date.isoformat()
+
     markup = daily_challenge_options_menu(
         options,
         accepted=state["accepted"],
         completed=state["completed"],
         failed=state["failed"],
+        finalize_day=finalize_day,
     )
     return "\n".join(lines).strip(), markup
 
@@ -225,3 +237,91 @@ async def check_challenge(callback: CallbackQuery) -> None:
 
     await callback.answer("Испытание закрыто!" if completed else "Проверила прогресс.")
     await _edit_challenge_message(callback.message, text, markup)
+
+
+def _parse_challenge_day(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+@router.callback_query(F.data.startswith("challenge:finalize:"))
+async def ask_finalize_challenges(callback: CallbackQuery) -> None:
+    day = _parse_challenge_day(callback.data.rsplit(":", 1)[1])
+    if day is None:
+        await callback.answer("Не смогла определить день.", show_alert=True)
+        return
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=challenge_finalize_confirm_menu(day.isoformat()))
+    except Exception:
+        await callback.message.answer(
+            "Точно всё внесено за этот день? После подтверждения незакрытые челленджи будут считаться проваленными.",
+            reply_markup=challenge_finalize_confirm_menu(day.isoformat()),
+        )
+
+
+@router.callback_query(F.data.startswith("challenge:finalize_cancel:"))
+async def cancel_finalize_challenges(callback: CallbackQuery) -> None:
+    day = _parse_challenge_day(callback.data.rsplit(":", 1)[1])
+    if day is None:
+        await callback.answer("Не смогла определить день.", show_alert=True)
+        return
+    await callback.answer("Оставила открытыми. Сначала внеси то, что забыла.")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=challenge_finalize_menu(day.isoformat()))
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("challenge:finalize_confirm:"))
+async def finalize_challenges(callback: CallbackQuery) -> None:
+    day = _parse_challenge_day(callback.data.rsplit(":", 1)[1])
+    if day is None:
+        await callback.answer("Не смогла определить день.", show_alert=True)
+        return
+
+    telegram_id = callback.from_user.id
+    async with _user_lock(telegram_id):
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, telegram_id, callback.from_user.full_name)
+            plan = await get_plan(session, profile.id, day)
+            if plan is None:
+                await callback.answer("На этот день челленджей нет.", show_alert=True)
+                return
+
+            before = challenge_state(plan)
+            before_completed = set(before["completed"])
+            before_failed = set(before["failed"])
+            _, _, chests = await evaluate_plan(session, profile, plan, final=True)
+            after = challenge_state(plan)
+            options = list(plan.options or [])
+            new_completed = [i for i in after["completed"] if i not in before_completed]
+            new_failed = [i for i in after["failed"] if i not in before_failed]
+            reward_xp = int(plan.reward_xp or 0) * len(new_completed)
+            reward_coins = int(plan.reward_coins or 0) * len(new_completed)
+            await session.commit()
+
+    lines = ["🌙 Итог по испытаниям"]
+    if new_completed:
+        lines.append("")
+        lines.extend(f"✅ {options[i].get('title', 'Испытание')}" for i in new_completed if 0 <= i < len(options))
+        lines.append(f"+{reward_xp} XP · +{reward_coins} монет")
+        if chests:
+            lines.append(f"🎁 Сундук испытания: +{chests}")
+    if new_failed:
+        lines.append("")
+        lines.extend(f"❌ {options[i].get('title', 'Испытание')}" for i in new_failed if 0 <= i < len(options))
+    if not new_completed and not new_failed:
+        lines.append("Все взятые испытания уже были закрыты раньше.")
+    lines.append("")
+    lines.append("— Теперь день можно считать закрытым.")
+
+    await callback.answer("День закрыт")
+    from app.services.assets import send_reaction
+    await send_reaction(callback.message, "selin", "triumphant" if new_completed else "neutral", "\n".join(lines))
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
