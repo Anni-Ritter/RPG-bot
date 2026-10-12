@@ -114,8 +114,24 @@ def story_day(progress: StoryProgress, today: date) -> int:
             return active
         completed_on = flags.get("week1_v2_completed_on")
         if completed_on:
-            delta = max(0, (today - date.fromisoformat(completed_on)).days)
-            return max(7, min(28, 7 + delta))
+            # V20: after the first week the story no longer skips forward just
+            # because calendar days passed. Each scene waits for the player's
+            # choice, then the next one opens on the following day. Existing
+            # saves start from the day they had already reached.
+            if "v3_active_day" not in flags:
+                legacy_delta = max(0, (today - date.fromisoformat(completed_on)).days)
+                flags["v3_active_day"] = max(8, min(28, 7 + legacy_delta))
+                flags["v3_day_unlocked_on"] = today.isoformat()
+                progress.flags = flags
+
+            active = int(flags.get("v3_active_day", 8))
+            done_on = flags.get(f"v3_day_completed_on_{active}")
+            if done_on and active < 28 and today > date.fromisoformat(done_on):
+                active += 1
+                flags["v3_active_day"] = active
+                flags["v3_day_unlocked_on"] = today.isoformat()
+                progress.flags = flags
+            return max(8, min(28, active))
 
     raw = (today - progress.season_started_on).days + 1
     return max(1, min(raw, 28))
@@ -394,3 +410,46 @@ async def queue_story_checkpoint_if_ready(
             payload={"day": day, "character": character, "emotion": emotion, "text": text},
         )
     )
+
+
+def choice_requirement_met(profile: UserProfile, choice: dict) -> bool:
+    req = dict(choice.get("requires") or {})
+    if not req:
+        return True
+    level, _, _ = level_from_xp(profile.xp)
+    checks = {
+        "strength": int(profile.strength or 0),
+        "willpower": int(profile.willpower or 0),
+        "tori_bond": int(profile.tori_bond or 0),
+        "level": int(level),
+    }
+    return all(checks.get(key, 0) >= int(value) for key, value in req.items())
+
+
+def story_choices_for_profile(profile: UserProfile, scene: dict) -> list[dict]:
+    rows = []
+    for raw in list(scene.get("choices") or []):
+        choice = dict(raw)
+        choice["locked"] = not choice_requirement_met(profile, choice)
+        rows.append(choice)
+    return rows
+
+
+def story_echo_text(progress: StoryProgress, scene: dict) -> str:
+    flags = _flags(progress)
+    lines = []
+    for echo in list(scene.get("echoes") or []):
+        day = int(echo.get("day") or 0)
+        wanted = str(echo.get("choice") or "")
+        if flags.get(choice_key(day)) == wanted and echo.get("text"):
+            lines.append(str(echo["text"]))
+    return "\n\n".join(lines)
+
+
+def mark_post_week1_day_complete(progress: StoryProgress, day: int, today: date) -> None:
+    if day < 8:
+        return
+    flags = _flags(progress)
+    flags[f"v3_day_completed_on_{day}"] = today.isoformat()
+    progress.last_viewed_day = max(progress.last_viewed_day, day)
+    progress.flags = flags

@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message, User
 from app.db import SessionLocal
 from app.keyboards import tori_chat_menu, tori_chat_stop_menu
 from app.services.achievements import achievement_messages, check_achievements
+from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.ai_engine import ai_enabled, generate_tori_reply
 from app.services.ai_features import build_ai_context, reserve_ai_call
 from app.services.assets import replace_reaction, replace_text_view, send_reaction
@@ -88,6 +89,7 @@ async def _tori_response(message: Message, action: str, source: str, user: User 
         text += "\n\nСвязь за общение на сегодня уже набрана, но взаимодействовать с ним можно сколько угодно."
 
     await send_reaction(message, "tori", emotion, text, reply_markup=tori_chat_stop_menu() if source == "free" else tori_chat_menu())
+    await check_and_notify_challenges(message, user.id, user.full_name)
     for item in achievement_messages(unlocked):
         await message.answer(item)
 

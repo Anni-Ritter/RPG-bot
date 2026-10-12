@@ -206,12 +206,13 @@ def quest_menu() -> InlineKeyboardMarkup:
 def story_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup | None:
     if not choices:
         return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=choice["label"], callback_data=f"storychoice:{day}:{choice['id']}")]
-            for choice in choices
-        ]
-    )
+    rows = []
+    for choice in choices:
+        locked = bool(choice.get("locked"))
+        label = ("🔒 " if locked else "") + str(choice["label"])
+        prefix = "storylocked" if locked else "storychoice"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{day}:{choice['id']}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def story_v2_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup | None:

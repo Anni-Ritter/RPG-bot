@@ -27,8 +27,12 @@ from app.services.story import (
     get_scene,
     get_story_flag,
     initialize_week1_v2,
+    story_choices_for_profile,
+    story_echo_text,
+    choice_requirement_met,
     mark_day_complete,
     mark_objective_ready,
+    mark_post_week1_day_complete,
     objective_progress_text,
     objective_ready,
     reward_flag,
@@ -248,12 +252,22 @@ async def story_today(message: Message) -> None:
         await session.commit()
 
     chapter_names = {1: "Руины", 2: "Лес", 3: "Таррен", 4: "Шпиль"}
-    header = f"День {day}/28 · {chapter_names[scene['chapter']]}"
+    header = f"День {day}/28 · {chapter_names[scene['chapter']]} · {scene.get('title', '')}"
+    echo = story_echo_text(progress, scene)
+    chosen = get_story_flag(progress, choice_key(day))
+    choices = story_choices_for_profile(profile, scene) if not chosen else []
+    body = f"{header}\n\n{scene['text']}"
+    if echo:
+        body += f"\n\n{echo}"
+    if chosen:
+        selected = next((c for c in scene.get("choices", []) if c.get("id") == chosen), None)
+        if selected:
+            body += f"\n\nТвой выбор сегодня: {selected.get('label')}"
     await send_background(
         message,
         story_background_key(day),
-        f"{header}\n\n{scene['text']}",
-        reply_markup=story_choices_menu(day, scene.get("choices", [])),
+        body,
+        reply_markup=story_choices_menu(day, choices),
     )
     for reward in reward_messages:
         await message.answer(reward)
@@ -357,6 +371,18 @@ async def story_v2_choice(callback: CallbackQuery) -> None:
             return
 
 
+@router.callback_query(F.data.startswith("storylocked:"))
+async def locked_story_choice(callback: CallbackQuery) -> None:
+    _, day_raw, choice_id = callback.data.split(":", 2)
+    day = int(day_raw)
+    scene = get_scene(day)
+    choice = next((item for item in scene.get("choices", []) if item.get("id") == choice_id), None)
+    await callback.answer(
+        str((choice or {}).get("requirement_text") or "Этот вариант пока недоступен."),
+        show_alert=True,
+    )
+
+
 @router.callback_query(F.data.startswith("storychoice:"))
 async def old_story_choice(callback: CallbackQuery) -> None:
     _, day_raw, choice_id = callback.data.split(":", 2)
@@ -382,10 +408,17 @@ async def old_story_choice(callback: CallbackQuery) -> None:
         if not choice:
             await callback.answer("Вариант не найден.", show_alert=True)
             return
+        if not choice_requirement_met(profile, choice):
+            await callback.answer(str(choice.get("requirement_text") or "Этот вариант пока недоступен."), show_alert=True)
+            return
 
         flags[key] = choice_id
         progress.flags = flags
+        mark_post_week1_day_complete(progress, day, today)
+        affinity = int(choice.get("affinity") or 0)
+        if affinity:
+            add_affinity(progress, affinity)
         await session.commit()
 
-    await callback.message.answer(choice["response"])
+    await send_reaction(callback.message, "selin", choice.get("emotion", "neutral"), choice["response"])
     await callback.answer()

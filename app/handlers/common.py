@@ -361,6 +361,7 @@ async def temptation_impulse(callback: CallbackQuery) -> None:
     if rewarded:
         text += "\n+10 XP · +1 Воля"
     await send_reaction(callback.message, "selin", "smirk", text)
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()
@@ -395,6 +396,7 @@ async def temptation_pause(callback: CallbackQuery) -> None:
         await session.commit()
     extra = "\n+5 XP за паузу." if eligible else ""
     await send_reaction(callback.message, "selin", "neutral", "Селин: — Хорошо. Пятнадцать минут. Потом решишь ещё раз." + extra)
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     await callback.answer()
 
 
@@ -436,6 +438,7 @@ async def temptation_no_longer(callback: CallbackQuery) -> None:
     if pending.reward_eligible:
         text += "\n+10 XP · +1 Воля · +2 связь с Тори"
     await send_reaction(callback.message, "selin", "soft_smile", text)
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()
@@ -611,6 +614,7 @@ async def quest_done(callback: CallbackQuery) -> None:
         unlocked = await check_achievements(session, profile)
         await session.commit()
     await send_reaction(callback.message, "tori", "proud", custom_quest_done() + f"\n+{quest.reward_xp} XP · +{quest.reward_coins} монет")
+    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()

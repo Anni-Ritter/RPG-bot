@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -28,6 +28,10 @@ _TARGETS = {
     "treat_limit": [1, 2],
     "energy_limit": [1],
     "protein_meals": [1, 2, 3],
+    "tori_bond": [1, 2, 3],
+    "tori_interactions": [1, 2, 3],
+    "willpower_actions": [1, 2],
+    "quests": [1, 2],
 }
 
 
@@ -64,31 +68,31 @@ def sanitize_options(raw: list[dict] | None) -> list[dict]:
     return options
 
 
-def fallback_options(weekday: int) -> list[dict]:
-    movement = {
-        "code": "workout" if weekday in {0, 3} else "steps",
-        "title": "День не мимо",
-        "description": "Закрой тренировку сегодня." if weekday in {0, 3} else "Набери 7 000 шагов за день.",
-        "target": 20 if weekday in {0, 3} else 7000,
-        "why": "Пусть сегодня будет хотя бы одна понятная победа.",
-    }
-    return [
-        movement,
-        {
-            "code": "meals",
-            "title": "Нормальная еда",
-            "description": "Отметь 3 полноценных приёма пищи.",
-            "target": 3,
-            "why": "Меньше хаотичных перекусов — больше нормальной еды.",
-        },
-        {
-            "code": "treat_limit",
-            "title": "Вкусняшка по плану",
-            "description": "Оставь сегодня максимум одну вкусняшку.",
-            "target": 1,
-            "why": "Не запрет, а выбранная граница на один день.",
-        },
+def fallback_options(day: date) -> list[dict]:
+    """Varied local fallback when AI is unavailable. Rotates by date instead of always steps/meals/treats."""
+    pools = [
+        [
+            {"code": "steps", "title": "Разведка района", "description": "Набери 7 000 шагов за день.", "target": 7000, "why": "Нормальный марш без требования идти всё сразу."},
+            {"code": "tori_interactions", "title": "Лисий инструктаж", "description": "Сделай 2 разных взаимодействия с Тори.", "target": 2, "why": "Иногда подготовка к приключениям — это ещё и не игнорировать фамильяра."},
+            {"code": "treat_limit", "title": "Один трофей", "description": "Оставь сегодня максимум одну вкусняшку.", "target": 1, "why": "Не запрет, а выбранная граница на один день."},
+        ],
+        [
+            {"code": "workout", "title": "Проверка снаряжения", "description": "Набери 20 минут любой тренировки.", "target": 20, "why": "Короткая тренировка тоже считается подготовкой."},
+            {"code": "food_logs", "title": "Журнал припасов", "description": "Запиши через фото 2 приёма пищи или продукта.", "target": 2, "why": "Чем лучше записи, тем полезнее советы Селин."},
+            {"code": "quests", "title": "Одно дело до конца", "description": "Закрой сегодня 1 квест.", "target": 1, "why": "Небольшая законченная задача лучше пяти начатых."},
+        ],
+        [
+            {"code": "tori_bond", "title": "Связь с проводником", "description": "Получи сегодня +2 связи с Тори.", "target": 2, "why": "Связь можно набрать общением, гидратацией и некоторыми событиями."},
+            {"code": "meals", "title": "Три остановки", "description": "Отметь 3 полноценных приёма пищи.", "target": 3, "why": "Меньше хаотичных перекусов, больше нормальной еды."},
+            {"code": "willpower_actions", "title": "Проверка Воли", "description": "Один раз поймай импульс или используй паузу искушения.", "target": 1, "why": "Не запрещать себе, а хотя бы один раз заметить автоматическое решение."},
+        ],
+        [
+            {"code": "steps", "title": "Дальний маршрут", "description": "Набери 9 000 шагов за день.", "target": 9000, "why": "Сегодня можно сделать упор на движение."},
+            {"code": "protein_meals", "title": "Нормальный паёк", "description": "Собери 2 полноценных приёма пищи примерно с 20+ г белка.", "target": 2, "why": "Белок — основа, но не единственное содержимое тарелки."},
+            {"code": "water", "title": "Фляга рядом", "description": "Отметь 3 порции гидратации.", "target": 3, "why": "Вода, zero и почти некалорийные напитки тоже подходят."},
+        ],
     ]
+    return pools[day.toordinal() % len(pools)]
 
 
 async def get_plan(session: AsyncSession, user_id: int, day: date) -> DailyChallengePlan | None:
@@ -98,6 +102,53 @@ async def get_plan(session: AsyncSession, user_id: int, day: date) -> DailyChall
             DailyChallengePlan.challenge_date == day,
         )
     )
+
+
+async def _recent_challenge_history(session: AsyncSession, user_id: int, day: date) -> str:
+    rows = list((await session.scalars(
+        select(DailyChallengePlan)
+        .where(
+            DailyChallengePlan.user_id == user_id,
+            DailyChallengePlan.challenge_date < day,
+            DailyChallengePlan.challenge_date >= day - timedelta(days=7),
+        )
+        .order_by(DailyChallengePlan.challenge_date.desc())
+    )).all())
+    lines = []
+    for row in rows:
+        opts = list(row.options or [])
+        if not opts:
+            continue
+        rendered = ", ".join(f"{o.get('code')} — {o.get('title')}" for o in opts[:3])
+        lines.append(f"{row.challenge_date.isoformat()}: {rendered}")
+    return "\n".join(lines)
+
+
+async def _count_events(session: AsyncSession, user_id: int, day: date, event_types: list[str]) -> int:
+    start = datetime.combine(day, time.min, tzinfo=TZ)
+    end = datetime.combine(day, time.max, tzinfo=TZ)
+    value = await session.scalar(
+        select(func.count(GameEvent.id)).where(
+            GameEvent.user_id == user_id,
+            GameEvent.event_type.in_(event_types),
+            GameEvent.occurred_at >= start,
+            GameEvent.occurred_at <= end,
+        )
+    )
+    return int(value or 0)
+
+
+async def _bond_gained_today(session: AsyncSession, user_id: int, day: date) -> int:
+    start = datetime.combine(day, time.min, tzinfo=TZ)
+    end = datetime.combine(day, time.max, tzinfo=TZ)
+    rows = list((await session.scalars(
+        select(GameEvent).where(
+            GameEvent.user_id == user_id,
+            GameEvent.occurred_at >= start,
+            GameEvent.occurred_at <= end,
+        )
+    )).all())
+    return sum(max(0, int((row.payload or {}).get("tori_bond_delta") or 0)) for row in rows)
 
 
 async def ensure_plan(session: AsyncSession, profile: UserProfile, day: date | None = None) -> DailyChallengePlan:
@@ -110,16 +161,17 @@ async def ensure_plan(session: AsyncSession, profile: UserProfile, day: date | N
     if ai_enabled() and await reserve_ai_call(session, profile.id, "challenge"):
         context = await build_ai_context(session, profile)
         coach_rules = await get_coach_rules(session, profile.id)
+        recent_history = await _recent_challenge_history(session, profile.id, day)
         # Avoid holding a SQLite write lock while waiting for the network.
         await session.commit()
         try:
-            generated = await generate_daily_challenges(context=context, coach_rules=coach_rules)
+            generated = await generate_daily_challenges(context=context, coach_rules=coach_rules, recent_history=recent_history)
             options = sanitize_options(generated.get("options"))
         except Exception as exc:
             print("AI daily challenge generation error:", repr(exc))
 
     if len(options) < 3:
-        for item in fallback_options(day.weekday()):
+        for item in fallback_options(day):
             if item["code"] not in {x["code"] for x in options}:
                 options.append(item)
             if len(options) == 3:
@@ -255,6 +307,16 @@ async def challenge_value_for_option(
         return int(stat.energy_drinks or 0)
     if code == "protein_meals":
         return await daily_protein_meal_count(session, profile.id, day)
+    if code == "tori_bond":
+        return await _bond_gained_today(session, profile.id, day)
+    if code == "tori_interactions":
+        return await _count_events(session, profile.id, day, ["tori_interaction_bond"])
+    if code == "willpower_actions":
+        return await _count_events(session, profile.id, day, [
+            "temptation_impulse_caught", "temptation_pause", "temptation_after_pause_declined",
+        ])
+    if code == "quests":
+        return await _count_events(session, profile.id, day, ["custom_quest_complete"])
     return 0
 
 
@@ -285,6 +347,14 @@ def progress_text(code: str, current: int, target: int, *, final: bool = False) 
         return f"{current} / {target} записей еды"
     if code == "protein_meals":
         return f"{current} / {target} белковых приёмов пищи"
+    if code == "tori_bond":
+        return f"+{current} / +{target} связи с Тори сегодня"
+    if code == "tori_interactions":
+        return f"{current} / {target} разных взаимодействий с Тори"
+    if code == "willpower_actions":
+        return f"{current} / {target} осознанных действий Воли"
+    if code == "quests":
+        return f"{current} / {target} закрытых квестов"
     if code == "treat_limit":
         suffix = " · итог вечером" if not final else ""
         return f"сейчас {current}, максимум {target} вкусняшек{suffix}"
