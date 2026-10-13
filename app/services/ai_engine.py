@@ -221,10 +221,35 @@ def ai_enabled() -> bool:
     return bool(settings.openai_api_key)
 
 
-def _client() -> AsyncOpenAI:
+def _client(*, timeout: float = 45.0) -> AsyncOpenAI:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
-    return AsyncOpenAI(api_key=settings.openai_api_key, timeout=45.0, max_retries=1)
+    return AsyncOpenAI(api_key=settings.openai_api_key, timeout=timeout, max_retries=1)
+
+
+def _response_output_text(response: Any) -> str:
+    """Prefer SDK output_text, but also collect text parts manually.
+
+    Reasoning models sometimes leave output_text empty while the JSON is
+    already present in message content, especially on incomplete responses.
+    """
+    direct = (getattr(response, "output_text", None) or "").strip()
+    if direct:
+        return direct
+
+    chunks: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        item_type = getattr(item, "type", None)
+        if item_type == "message":
+            for part in getattr(item, "content", None) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    chunks.append(str(text))
+        elif item_type in {"output_text", "text"}:
+            text = getattr(item, "text", None)
+            if text:
+                chunks.append(str(text))
+    return "\n".join(chunks).strip()
 
 
 def _known_story_context(day: int) -> str:
@@ -319,38 +344,66 @@ def _selin_system(context: dict[str, Any], *, can_offer_quest: bool) -> str:
 """.strip()
 
 
-async def _structured_response(*, system: str, user_content: Any, schema_name: str, schema: dict, max_tokens: int = 350) -> dict:
-    client = _client()
+async def _structured_response(
+    *,
+    system: str,
+    user_content: Any,
+    schema_name: str,
+    schema: dict,
+    max_tokens: int = 350,
+    timeout: float = 45.0,
+) -> dict:
+    client = _client(timeout=timeout)
     last_error: Exception | None = None
+    token_budget = max_tokens
 
-    for attempt in range(2):
-        response = await client.responses.create(
-            model=settings.openai_model,
-            input=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-            max_output_tokens=max_tokens if attempt == 0 else max(max_tokens * 2, 900),
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-        )
-        output_text = (response.output_text or "").strip()
+    for attempt in range(3):
+        try:
+            response = await client.responses.create(
+                model=settings.openai_model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+                max_output_tokens=token_budget,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    }
+                },
+            )
+        except Exception as exc:
+            last_error = exc
+            # Transient network/timeout failures: one more try with the same budget.
+            if attempt < 2:
+                continue
+            break
+
+        output_text = _response_output_text(response)
+        incomplete = getattr(response, "incomplete_details", None)
+        incomplete_reason = getattr(incomplete, "reason", None) if incomplete else None
+
         if not output_text:
             last_error = RuntimeError(
-                f"OpenAI returned empty output (status={response.status}, incomplete_details={response.incomplete_details})"
+                f"empty output status={response.status} incomplete={incomplete_reason}"
             )
+            if incomplete_reason == "max_output_tokens" and attempt < 2:
+                token_budget = max(token_budget * 2, 1400)
             continue
+
         try:
             result = json.loads(output_text)
         except json.JSONDecodeError as exc:
-            last_error = exc
+            last_error = RuntimeError(
+                f"invalid JSON status={response.status} incomplete={incomplete_reason}: {exc}"
+            )
+            if incomplete_reason == "max_output_tokens" and attempt < 2:
+                token_budget = max(token_budget * 2, 1400)
             continue
+
         if isinstance(result, dict):
             return result
         last_error = TypeError("OpenAI structured output is not a JSON object")
@@ -460,13 +513,15 @@ async def analyze_food_images(
         intro += f"\n\nКомментарий пользователя (считать важным источником): {comment}"
 
     content: list[dict[str, Any]] = [{"type": "input_text", "text": intro}]
-    for image_bytes, mime_type in images[:8]:
+    # Keep the first photo high-detail for labels; extra album photos use auto
+    # so multi-image requests stop timing out on Bothost.
+    for index, (image_bytes, mime_type) in enumerate(images[:8]):
         b64 = base64.b64encode(image_bytes).decode("ascii")
         content.append(
             {
                 "type": "input_image",
                 "image_url": f"data:{mime_type};base64,{b64}",
-                "detail": "high",
+                "detail": "high" if index == 0 else "auto",
             }
         )
 
@@ -475,7 +530,8 @@ async def analyze_food_images(
         user_content=content,
         schema_name="food_image_analysis_v9",
         schema=FOOD_SCHEMA,
-        max_tokens=750,
+        max_tokens=1200,
+        timeout=90.0 if len(images) > 1 else 70.0,
     )
 
 

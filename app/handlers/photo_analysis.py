@@ -395,18 +395,31 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
         # Telegram file identifiers or API secrets.
         status = getattr(exc, "status_code", None)
         error_type = type(exc).__name__
+        reason = str(exc)[:220].replace("\n", " ")
         logger.exception(
-            "[PHOTO_AI] failed stage=%s error=%s http_status=%s",
-            stage, error_type, status,
+            "[PHOTO_AI] failed stage=%s error=%s http_status=%s detail=%s",
+            stage, error_type, status, reason,
         )
-        print(f"[PHOTO_AI] failed at {stage}: {error_type}, HTTP={status}", flush=True)
+        print(f"[PHOTO_AI] failed at {stage}: {error_type}, HTTP={status}, detail={reason}", flush=True)
+
+        lowered = reason.lower()
+        if "timeout" in lowered or "timed out" in lowered:
+            hint = "AI слишком долго обрабатывал фото. Попробуй 1–2 чётких кадра вместо большого альбома."
+        elif "max_output_tokens" in lowered or "empty output" in lowered or "invalid json" in lowered:
+            hint = "AI оборвал ответ посреди расчёта. Повтори ещё раз — обычно со второй попытки проходит."
+        elif "api_key" in lowered or "authentication" in lowered or "401" in lowered:
+            hint = "Похоже, на Bothost проблема с OPENAI_API_KEY."
+        else:
+            hint = "Можно попробовать ещё раз или отметить вручную."
+
         await _edit_flow_message(
             message,
             state,
-            "Не получилось распознать изображение. "
-            f"Этап: {stage}. Ошибка: {error_type}. "
-            "Если повторится, проверь в Bothost строку [PHOTO_AI]. "
-            "Можно попробовать ещё раз или отметить вручную.",
+            "Не получилось распознать изображение.\n"
+            f"Этап: {stage}\n"
+            f"Ошибка: {error_type}\n"
+            f"{hint}\n"
+            "В логах Bothost ищи строку [PHOTO_AI].",
         )
         await state.clear()
         return
