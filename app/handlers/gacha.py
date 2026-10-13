@@ -158,73 +158,342 @@ async def chest_open(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-async def _show_wardrobe_list(callback: CallbackQuery, page: int = 0) -> None:
-    page_size = 8
+# Gallery filters live in callback_data, so flipping a card does not require
+# mutable per-user navigation state or any changes to the existing SQLite data.
+GALLERY_FILTER_NAMES = {
+    "a": "Все",
+    "s": "Селин",
+    "t": "Тори",
+    "b": "Фоны",
+    "g": "С артом",
+    "n": "Без арта",
+    "v": "Любимые",
+}
+
+
+def _gallery_filter_rows(rows, images_by_scroll: dict, filter_code: str):
+    if filter_code == "s":
+        return [(inv, scroll) for inv, scroll in rows if scroll.item_type in {"outfit", "accessory"}]
+    if filter_code == "t":
+        return [(inv, scroll) for inv, scroll in rows if scroll.item_type == "tori"]
+    if filter_code == "b":
+        return [(inv, scroll) for inv, scroll in rows if scroll.item_type == "background"]
+    if filter_code == "g":
+        return [(inv, scroll) for inv, scroll in rows if scroll.id in images_by_scroll]
+    if filter_code == "n":
+        return [(inv, scroll) for inv, scroll in rows if scroll.id not in images_by_scroll]
+    if filter_code == "v":
+        return [(inv, scroll) for inv, scroll in rows if inv.is_favorite]
+    return rows
+
+
+def _gallery_filter_buttons(active: str):
+    def filter_button(code: str, short_name: str) -> InlineKeyboardButton:
+        label = ("• " if active == code else "") + short_name
+        return InlineKeyboardButton(text=label, callback_data=f"wc:{code}:0")
+    return [
+        [filter_button("a", "Все"), filter_button("s", "Селин"),
+         filter_button("t", "Тори"), filter_button("b", "Фоны")],
+        [filter_button("g", "С артом"), filter_button("n", "Без арта"),
+         filter_button("v", "💜")],
+    ]
+
+
+def _gallery_card_markup(
+    filter_code: str, position: int, total: int,
+    inv: ScrollInventory, scroll: ScrollDefinition, count: int,
+) -> InlineKeyboardMarkup:
+    next_pos = (position + 1) % total
+    prev_pos = (position - 1) % total
+    rows = [
+        [InlineKeyboardButton(text="⬅️", callback_data=f"wc:{filter_code}:{prev_pos}"),
+         InlineKeyboardButton(text=f"{position + 1}/{total}", callback_data="noop"),
+         InlineKeyboardButton(text="➡️", callback_data=f"wc:{filter_code}:{next_pos}")],
+    ]
+    rows += _gallery_filter_buttons(filter_code)
+    if inv.status == "sealed":
+        rows.append([InlineKeyboardButton(text="🔓 Раскрыть свиток", callback_data=f"wr:{filter_code}:{position}:{inv.id}")])
+    else:
+        rows.append([InlineKeyboardButton(text="📜 Промпт", callback_data=f"wp:{filter_code}:{position}:{inv.id}"),
+                     InlineKeyboardButton(text="🖼 Добавить арт", callback_data=f"wa:{filter_code}:{position}:{inv.id}")])
+        if count:
+            rows.append([InlineKeyboardButton(text=f"🎨 Варианты ({count})", callback_data=f"wv:{filter_code}:{position}:0")])
+        elif inv.status != "generated":
+            rows.append([InlineKeyboardButton(text="✅ Отметить сгенерированным", callback_data=f"wm:{filter_code}:{position}:{inv.id}")])
+    rows.append([InlineKeyboardButton(
+        text="💜 Убрать из любимого" if inv.is_favorite else "♡ В любимое",
+        callback_data=f"wf:{filter_code}:{position}:{inv.id}",
+    )])
+    rows.append([InlineKeyboardButton(text="⬅️ В гардероб", callback_data="wardrobe:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _gallery_data(user_telegram_id: int, filter_code: str, full_name: str = ""):
     async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        rows = (
-            await session.execute(
-                select(ScrollInventory, ScrollDefinition)
-                .join(ScrollDefinition, ScrollDefinition.id == ScrollInventory.scroll_id)
-                .where(ScrollInventory.user_id == profile.id)
-                .order_by(ScrollInventory.is_favorite.desc(), ScrollInventory.obtained_at.desc())
-            )
-        ).all()
+        profile = await get_or_create_profile(session, user_telegram_id, full_name)
+        rows = (await session.execute(
+            select(ScrollInventory, ScrollDefinition)
+            .join(ScrollDefinition, ScrollDefinition.id == ScrollInventory.scroll_id)
+            .where(ScrollInventory.user_id == profile.id)
+            .order_by(ScrollInventory.obtained_at.desc(), ScrollInventory.id.desc())
+        )).all()
+        generations = (await session.scalars(
+            select(ScrollGeneration)
+            .where(ScrollGeneration.user_id == profile.id)
+            .order_by(ScrollGeneration.created_at.asc(), ScrollGeneration.id.asc())
+        )).all()
         await session.commit()
+    by_scroll: dict[str, list[ScrollGeneration]] = {}
+    for generation in generations:
+        by_scroll.setdefault(generation.scroll_id, []).append(generation)
+    result = _gallery_filter_rows(rows, by_scroll, filter_code)
+    return result, by_scroll, len(rows)
 
+
+async def _render_gallery_card(callback: CallbackQuery, filter_code: str = "a", position: int = 0) -> None:
+    if filter_code not in GALLERY_FILTER_NAMES:
+        filter_code = "a"
+    rows, by_scroll, grand_total = await _gallery_data(callback.from_user.id, filter_code, callback.from_user.full_name)
     if not rows:
-        await replace_background(
-            callback.message,
-            "atelier_wardrobe",
-            "Пока ни одного свитка.",
-            reply_markup=back_menu("wardrobe:menu", "⬅️ В гардероб"),
+        text = (
+            f"📚 Гардероб · всего свитков: {grand_total}\n"
+            f"Фильтр: {GALLERY_FILTER_NAMES[filter_code]}\n\n"
+            "Здесь пока пусто. Выбери другой фильтр."
         )
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            *_gallery_filter_buttons(filter_code),
+            [InlineKeyboardButton(text="⬅️ В гардероб", callback_data="wardrobe:menu")],
+        ])
+        await replace_background(callback.message, "atelier_wardrobe", text, reply_markup=markup)
         return
-
-    total_pages = max(1, (len(rows) + page_size - 1) // page_size)
-    page = max(0, min(page, total_pages - 1))
-    chunk = rows[page * page_size:(page + 1) * page_size]
-
-    buttons = []
-    for inv, scroll in chunk:
-        fav = "💜 " if inv.is_favorite else ""
-        label = f"{fav}{scroll.rarity.title()} · {get_scroll_target(scroll)} · {scroll.name}"
-        if len(label) > 58:
-            label = label[:57].rstrip() + "…"
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"scroll:open:{scroll.id}")])
-
-    if total_pages > 1:
-        nav = []
-        if page > 0:
-            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"wardrobe:listpage:{page - 1}"))
-        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
-        if page < total_pages - 1:
-            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"wardrobe:listpage:{page + 1}"))
-        buttons.append(nav)
-
-    buttons.append([InlineKeyboardButton(text="⬅️ В гардероб", callback_data="wardrobe:menu")])
-    await replace_background(
-        callback.message,
-        "atelier_wardrobe",
-        f"📚 Мои свитки: {len(rows)}\nВыбери свиток — список не будет разрастаться отдельными сообщениями.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    position = max(0, min(position, len(rows) - 1))
+    inv, scroll = rows[position]
+    generation_options = by_scroll.get(scroll.id, [])
+    primary = next((g for g in generation_options if g.is_primary), None)
+    if primary is None and generation_options:
+        primary = generation_options[0]
+    status = {"sealed": "🔒 Не раскрыт", "revealed": "📜 Раскрыт", "generated": "🖼 Сгенерирован"}
+    type_labels = {
+        "accessory": "Образ с акцентом на аксессуар",
+        "outfit": "Полный образ",
+        "tori": "Образ Тори",
+        "background": "Фон",
+    }
+    text = (
+        f"📚 {GALLERY_FILTER_NAMES[filter_code]} · {position + 1} из {len(rows)}\n\n"
+        f"🎴 {scroll.name}\n"
+        f"{scroll.rarity.title()} · {get_scroll_target(scroll)}"
+        f"{' · 💜' if inv.is_favorite else ''}\n"
+        f"Коллекция: {scroll.collection}\n"
+        f"Тип: {type_labels.get(scroll.item_type, get_scroll_type_label(scroll))}\n"
+        f"Статус: {status.get(inv.status, inv.status)}\n"
+        f"{'🖼 Загружено артов: ' + str(len(generation_options)) if generation_options else '🎨 Арт ещё не прикреплён'}"
     )
+    markup = _gallery_card_markup(filter_code, position, len(rows), inv, scroll, len(generation_options))
+    if primary:
+        try:
+            await replace_photo_view(callback.message, primary.telegram_file_id, text, reply_markup=markup)
+            return
+        except Exception as exc:
+            print("Wardrobe preview error:", repr(exc))
+    await replace_background(callback.message, "atelier_wardrobe", text, reply_markup=markup)
+
+
+async def _gallery_selected(callback: CallbackQuery, filter_code: str, position: int):
+    if filter_code not in GALLERY_FILTER_NAMES:
+        filter_code = "a"
+    rows, by_scroll, _ = await _gallery_data(callback.from_user.id, filter_code, callback.from_user.full_name)
+    if not 0 <= position < len(rows):
+        return None
+    inv, scroll = rows[position]
+    return inv, scroll, by_scroll.get(scroll.id, [])
 
 
 @router.callback_query(F.data == "wardrobe:list")
-async def wardrobe_list(callback: CallbackQuery) -> None:
-    await _show_wardrobe_list(callback, 0)
+async def wardrobe_list(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await _render_gallery_card(callback)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("wardrobe:listpage:"))
-async def wardrobe_list_page(callback: CallbackQuery) -> None:
+async def wardrobe_list_page(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     try:
         page = int(callback.data.rsplit(":", 1)[1])
     except (TypeError, ValueError):
         page = 0
-    await _show_wardrobe_list(callback, page)
+    await _render_gallery_card(callback, "a", page * 8)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("wc:"))
+async def wardrobe_gallery_card(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    try:
+        _, filter_code, raw_index = callback.data.split(":")
+        position = int(raw_index)
+    except (AttributeError, ValueError):
+        await callback.answer("Не удалось открыть карточку.", show_alert=True)
+        return
+    await _render_gallery_card(callback, filter_code, position)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(("wp:", "wr:", "wa:", "wf:", "wm:")))
+async def wardrobe_gallery_action(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        action, filter_code, raw_position, raw_inv_id = callback.data.split(":")
+        position, expected_inventory_id = int(raw_position), int(raw_inv_id)
+    except (AttributeError, ValueError):
+        await callback.answer("Не удалось открыть действие.", show_alert=True)
+        return
+    current = await _gallery_selected(callback, filter_code, position)
+    if current is None:
+        await callback.answer("Свиток переместился. Открой галерею заново.", show_alert=True)
+        return
+    inv, scroll, _ = current
+    if inv.id != expected_inventory_id:
+        await callback.answer("Порядок свитков изменился. Открой карточку заново.", show_alert=True)
+        return
+    back = f"wc:{filter_code}:{position}"
+    if action == "wp":
+        if inv.status == "sealed":
+            await callback.answer("Сначала раскрой свиток.", show_alert=True)
+            return
+        await replace_text_view(
+            callback.message,
+            f"🎨 Промпт для генерации: {get_scroll_target(scroll)}\n"
+            f"«{scroll.name}»\n\n{scroll.prompt}",
+            reply_markup=back_menu(back, "⬅️ К образу"),
+        )
+    elif action == "wr":
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+            actual = await session.scalar(select(ScrollInventory).where(
+                ScrollInventory.user_id == profile.id, ScrollInventory.scroll_id == scroll.id,
+            ))
+            if not actual:
+                await callback.answer("Свиток не найден.", show_alert=True)
+                return
+            if actual.status == "sealed":
+                actual.status = "revealed"
+                actual.revealed_at = datetime.now(TZ)
+                await session.commit()
+        await replace_text_view(
+            callback.message,
+            f"🔓 «{scroll.name}» раскрыт.\n"
+            f"Промпт для {get_scroll_target(scroll)}:\n\n{scroll.prompt}",
+            reply_markup=back_menu(back, "⬅️ К образу"),
+        )
+    elif action == "wa":
+        if inv.status == "sealed":
+            await callback.answer("Сначала раскрой свиток.", show_alert=True)
+            return
+        await state.set_state(ScrollImageState.waiting_photo)
+        await state.update_data(
+            scroll_id=scroll.id,
+            gallery_back="wc:g:0" if filter_code == "n" else back,
+        )
+        await replace_text_view(
+            callback.message,
+            f"🖼 Отправь арт для: {get_scroll_target(scroll)}\n"
+            f"Свиток «{scroll.name}»",
+            reply_markup=back_menu(back, "⬅️ Отмена"),
+        )
+    elif action == "wf":
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+            actual = await session.scalar(select(ScrollInventory).where(
+                ScrollInventory.user_id == profile.id, ScrollInventory.scroll_id == scroll.id,
+            ))
+            if actual:
+                actual.is_favorite = not actual.is_favorite
+                await session.commit()
+        # Removing the only favorite can empty the filter; the gallery handles it.
+        await _render_gallery_card(callback, filter_code, position)
+    elif action == "wm":
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+            actual = await session.scalar(select(ScrollInventory).where(
+                ScrollInventory.user_id == profile.id, ScrollInventory.scroll_id == scroll.id,
+            ))
+            if actual and actual.status != "sealed":
+                actual.status = "generated"
+                actual.generated_at = datetime.now(TZ)
+                await session.commit()
+        await _render_gallery_card(callback, filter_code, position)
+    await callback.answer()
+
+
+async def _render_generation_card(
+    callback: CallbackQuery, filter_code: str, position: int, image_position: int,
+) -> None:
+    current = await _gallery_selected(callback, filter_code, position)
+    if current is None:
+        await _render_gallery_card(callback, filter_code, 0)
+        return
+    _, scroll, images = current
+    if not images:
+        await callback.answer("Арты для этого свитка ещё не добавлены.", show_alert=True)
+        return
+    image_position = max(0, min(image_position, len(images) - 1))
+    gen = images[image_position]
+    count = len(images)
+    markup_rows = [
+        [InlineKeyboardButton(text="⬅️", callback_data=f"wv:{filter_code}:{position}:{(image_position - 1) % count}"),
+         InlineKeyboardButton(text=f"{image_position + 1}/{count}", callback_data="noop"),
+         InlineKeyboardButton(text="➡️", callback_data=f"wv:{filter_code}:{position}:{(image_position + 1) % count}")],
+    ]
+    if not gen.is_primary:
+        markup_rows.append([InlineKeyboardButton(
+            text="⭐ Сделать основным", callback_data=f"wvs:{gen.id}:{filter_code}:{position}:{image_position}",
+        )])
+    markup_rows.append([InlineKeyboardButton(text="⬅️ К свитку", callback_data=f"wc:{filter_code}:{position}")])
+    await replace_photo_view(
+        callback.message,
+        gen.telegram_file_id,
+        f"🖼 {scroll.name}\nВариант {image_position + 1} из {count}"
+        + (" · ⭐ основной" if gen.is_primary else ""),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=markup_rows),
+    )
+
+
+@router.callback_query(F.data.startswith("wv:"))
+async def wardrobe_variant(callback: CallbackQuery) -> None:
+    try:
+        _, filter_code, raw_position, raw_image = callback.data.split(":")
+        position, image_position = int(raw_position), int(raw_image)
+    except (AttributeError, ValueError):
+        await callback.answer("Не удалось открыть арт.", show_alert=True)
+        return
+    await _render_generation_card(callback, filter_code, position, image_position)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("wvs:"))
+async def wardrobe_set_primary(callback: CallbackQuery) -> None:
+    try:
+        _, raw_id, filter_code, raw_position, raw_image = callback.data.split(":")
+        generation_id, position, image_position = int(raw_id), int(raw_position), int(raw_image)
+    except (AttributeError, ValueError):
+        await callback.answer("Не удалось выбрать арт.", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        chosen = await session.get(ScrollGeneration, generation_id)
+        if not chosen or chosen.user_id != profile.id:
+            await callback.answer("Арт не найден.", show_alert=True)
+            return
+        siblings = (await session.scalars(select(ScrollGeneration).where(
+            ScrollGeneration.user_id == profile.id,
+            ScrollGeneration.scroll_id == chosen.scroll_id,
+        ))).all()
+        for item in siblings:
+            item.is_primary = item.id == chosen.id
+        await session.commit()
+    await _render_generation_card(callback, filter_code, position, image_position)
+    await callback.answer("Основной арт обновлён.")
 
 
 @router.callback_query(F.data.startswith("scroll:open:"))
@@ -346,7 +615,7 @@ async def add_scroll_image(callback: CallbackQuery, state: FSMContext) -> None:
             return
 
     await state.set_state(ScrollImageState.waiting_photo)
-    await state.update_data(scroll_id=scroll_id)
+    await state.update_data(scroll_id=scroll_id, gallery_back=f"scroll:open:{scroll_id}")
     target = get_scroll_target(scroll)
     await replace_text_view(
         callback.message,
@@ -399,14 +668,17 @@ async def save_scroll_image(message: Message, state: FSMContext) -> None:
         "selin",
         "soft_smile",
         f"Селин: — Вот, теперь другое дело.\nК «{scroll.name}» добавлен вариант #{len(existing) + 1}.",
-        reply_markup=back_menu(f"scroll:open:{scroll.id}", "⬅️ К свитку"),
+        reply_markup=back_menu(data.get("gallery_back") or f"scroll:open:{scroll.id}", "⬅️ К свитку"),
     )
 
 
 @router.message(ScrollImageState.waiting_photo)
 async def scroll_image_requires_photo(message: Message, state: FSMContext) -> None:
-    scroll_id = (await state.get_data()).get("scroll_id")
-    reply_markup = back_menu(f"scroll:open:{scroll_id}", "⬅️ Отмена") if scroll_id else None
+    state_data = await state.get_data()
+    scroll_id = state_data.get("scroll_id")
+    reply_markup = back_menu(
+        state_data.get("gallery_back") or f"scroll:open:{scroll_id}", "⬅️ Отмена",
+    ) if scroll_id else None
     await message.answer(
         "Мне нужна именно картинка. Отправь её как фото, и я привяжу к свитку.",
         reply_markup=reply_markup,
@@ -416,27 +688,12 @@ async def scroll_image_requires_photo(message: Message, state: FSMContext) -> No
 @router.callback_query(F.data.startswith("scroll:gallery:"))
 async def scroll_gallery(callback: CallbackQuery) -> None:
     scroll_id = callback.data.rsplit(":", 1)[1]
-    async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        scroll = await session.get(ScrollDefinition, scroll_id)
-        generations = list((await session.scalars(
-            select(ScrollGeneration)
-            .where(ScrollGeneration.user_id == profile.id, ScrollGeneration.scroll_id == scroll_id)
-            .order_by(ScrollGeneration.is_primary.desc(), ScrollGeneration.created_at.asc())
-        )).all())
-        await session.commit()
-
-    if not scroll or not generations:
-        await callback.answer("К этому свитку пока нет загруженных картинок.", show_alert=True)
+    rows, _, _ = await _gallery_data(callback.from_user.id, "a")
+    position = next((i for i, (_, scroll) in enumerate(rows) if scroll.id == scroll_id), None)
+    if position is None:
+        await callback.answer("Свиток не найден.", show_alert=True)
         return
-
-    for index, generation in enumerate(generations, start=1):
-        primary = " · основной" if generation.is_primary else ""
-        await callback.message.answer_photo(
-            generation.telegram_file_id,
-            caption=f"{scroll.name} · вариант {index}{primary}",
-            reply_markup=generation_menu(generation.id, generation.is_primary, scroll.id),
-        )
+    await _render_generation_card(callback, "a", position, 0)
     await callback.answer()
 
 

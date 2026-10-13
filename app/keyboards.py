@@ -135,7 +135,9 @@ def wardrobe_menu(chests: int) -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(text=f"✨ Открыть сундук ({chests})", callback_data="chest:open")])
     buttons.extend(
         [
-            [InlineKeyboardButton(text="📚 Мои свитки", callback_data="wardrobe:list")],
+            [InlineKeyboardButton(text="🖼 Листать свитки", callback_data="wardrobe:list")],
+            [InlineKeyboardButton(text="🎨 Галерея артов", callback_data="wc:g:0"),
+             InlineKeyboardButton(text="💜 Избранное", callback_data="wc:v:0")],
             [InlineKeyboardButton(text="🪙 Ателье", callback_data="shop:atelier")],
             [InlineKeyboardButton(text="✨ Пыль ателье", callback_data="shop:dust")],
         ]
