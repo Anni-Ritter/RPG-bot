@@ -79,7 +79,7 @@ FOOD_SCHEMA = {
         "drink_kind": {"type": "string", "enum": ["plain", "caloric", "energy", "unknown"]},
         "items": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-        "nutrition_source": {"type": "string", "enum": ["label", "mixed", "photo_estimate", "none"]},
+        "nutrition_source": {"type": "string", "enum": ["label", "mixed", "photo_estimate", "text_estimate", "none"]},
         "reference_grams": {"type": ["number", "null"]},
         "calories_kcal": {"type": ["number", "null"]},
         "calories_min_kcal": {"type": ["integer", "null"]},
@@ -467,6 +467,49 @@ async def analyze_food_images(
     )
 
 
+async def suggest_mini_quest(*, context: dict[str, Any]) -> dict:
+    """Offer one bounded small errand instead of asking the player to invent a quest."""
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "reason": {"type": "string"},
+            "difficulty": {"type": "string", "enum": ["easy", "normal"]},
+        },
+        "required": ["title", "reason", "difficulty"],
+    }
+    system = """Ты Селин. Придумай ровно одно маленькое бытовое дело для Проводника на сегодня (примерно 5–20 минут), необязательное и доступное без специальных условий. Это может быть уборка, уход за собой, маленькая прогулка, приготовление еды, разбор рабочего стола, отдых после сложного дня или что-то подобное. Избегай подсчёта калорий, веса, ограничений еды, наказаний и целей на физические нагрузки. Не повторяй однотипные шаги/воду/белок. Название <=60 символов. Короткое игровое обоснование 1 фразой, разговорным русским, без литературщины. Игрок сам отметит выполнение."""
+    return await _structured_response(
+        system=system,
+        user_content=f"Предложи одно новое посильное дело. Сейчас день истории {context.get('story_day')}; известно о пользователе: {context.get('memories', 'мало')}",
+        schema_name="daily_mini_quest_v22",
+        schema=schema, max_tokens=250,
+    )
+
+
+async def analyze_food_text(description: str) -> dict:
+    """Estimate a food/drink from text only; do not impersonate a label or photo."""
+    system = """
+Ты помогаешь записать еду или напиток в личном дневнике по ОДНОМУ ТЕКСТОВОМ описанию пользователя, без фото.
+Если пользователь сообщил КБЖУ на 100 г и съеденное количество, пересчитай его аккуратно.
+Если указана только еда/название кафе (например, «выпила какао из кофейни»), укажи диапазон оценки,
+confidence=low, nutrition_source=text_estimate. Не выдавай число за измеренное.
+У кафе сильно меняются молоко, сироп, объём, поэтому не придумывай точный рецепт.
+Если есть только описание без объёма, можно оставить калории null и попросить уточнение в note.
+Если пользователь передал конкретные цифры КБЖУ, nutrition_source=label, только если он прямо их указал;
+иначе text_estimate. Поля per_100g заполняй лишь по известным значениям. Не путай число на 100 г и на порцию.
+Категории: meal, snack, treat, drink; у напитков drink_kind=plain/caloric/energy/unknown.
+Не выдумывай, что видела изображение, и не делай выводов о здоровье или весе.
+""".strip()
+    return await _structured_response(
+        system=system,
+        user_content=f"Запиши по описанию (только одна порция): {description[:2000]}",
+        schema_name="food_text_analysis_v22",
+        schema=FOOD_SCHEMA,
+        max_tokens=670,
+    )
+
+
 async def analyze_food_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
     return await analyze_food_images([(image_bytes, mime_type)])
 
@@ -562,6 +605,7 @@ async def generate_evening_nutrition_review(
 - сравни известную калорийность с дневным ориентиром. Если она выше — спокойно назови примерную разницу и покажи 1–3 конкретных места из сегодняшних записей, где можно было сократить без голода: соус, сыр, масло, жирный продукт, сладкий напиток, вкусняшка или чрезмерная порция;
 - не предлагай пропускать следующий приём пищи, голодать, «отрабатывать» еду тренировкой или компенсировать на следующий день;
 - если калорийность заметно ниже ориентира, не хвали это как победу и не советуй урезать ещё сильнее; цель — устойчивый нормальный рацион;
+- если сегодня была тренировка, учитывай, что потребности в энергии, гидратации и восстановлении могут отличаться. Не вычитай якобы сожжённые ккал из еды и не назначай автоматическую новую норму; при голоде после тренировки предложи нормальную еду с белком и углеводами. 1500 ккал — не универсальная рекомендация для тренировочного дня; не делай медицинских выводов;
 - оцени структуру дня: были ли полноценные приёмы пищи, белок в основных приёмах, овощи/зелень, нормальные углеводы, много ли случайных перекусов/вкусняшек, не набежало ли слишком много жира;
 - правила тренера имеют приоритет над общими догадками;
 - предложи 1–3 очень конкретных улучшения на завтра;
@@ -582,6 +626,7 @@ async def generate_evening_nutrition_review(
 - известное КБЖУ: {context['nutrition_calories']} ккал; Б {context['nutrition_protein']} г; Ж {context['nutrition_fat']} г; У {context['nutrition_carbs']} г
 - калорийный ориентир: около {context.get('calorie_target_kcal', 1500)} ккал
 - разница по известным записям: {context.get('calorie_delta_kcal', 0):+d} ккал
+- тренировки сегодня: {context.get('workouts_today_count', 0)}; типы: {context.get('workout_types_today', 'нет')}; минут самостоятельных занятий: {context.get('workout_manual_minutes_today', 0)}
 - записей еды с КБЖУ: {context['nutrition_count']} из {context.get('nutrition_entry_count', context['nutrition_count'])} подробных записей
 - из них оценок в основном по фото: {context.get('nutrition_photo_estimate_count', 0)}; низкая уверенность: {context.get('nutrition_low_confidence_count', 0)}
 
@@ -642,6 +687,7 @@ async def generate_intraday_nutrition_advice(
 - про питьё говори как про гидратацию: вода, zero и почти некалорийные напитки подходят. Не требуй именно чистую воду;
 - если всё идёт нормально, можно дать короткое подтверждение курса и один конкретный ориентир на следующий приём;
 - правила тренера ниже имеют приоритет над общими эвристиками;
+- если сегодня была тренировка, учитывай восстановление, потребность в полноценной еде и питье. Не вычисляй «остаток калорий» с вычетом расхода тренировки, не предлагай компенсировать еду упражнениями и не применяй одинаково строгую оценку к дню отдыха и дню активности;
 - не ставь диагнозы и не назначай лечение.
 
 Поле text — только сама реплика Селин. Не повторяй полный дневной отчёт и не перечисляй все цифры без необходимости.
@@ -660,6 +706,7 @@ async def generate_intraday_nutrition_advice(
 - известное КБЖУ: {context['nutrition_calories']} ккал; Б {context['nutrition_protein']} г; Ж {context['nutrition_fat']} г; У {context['nutrition_carbs']} г
 - дневной ориентир: около {context.get('calorie_target_kcal', 1500)} ккал
 - по известным записям до/сверх ориентира: {context.get('calorie_delta_kcal', 0):+d} ккал
+- тренировки за сегодня: {context.get('workouts_today_count', 0)}; {context.get('workout_types_today', 'нет записей')}; минут самостоятельных: {context.get('workout_manual_minutes_today', 0)}
 - записей с КБЖУ: {context['nutrition_count']} из {context.get('nutrition_entry_count', context['nutrition_count'])}
 - оценок в основном по фото: {context.get('nutrition_photo_estimate_count', 0)}; низкая уверенность: {context.get('nutrition_low_confidence_count', 0)}
 

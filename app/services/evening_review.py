@@ -27,7 +27,7 @@ def _entries_text(rows) -> str:
         if row.carbs_g is not None:
             macros.append(f"У {row.carbs_g:g}")
         suffix = " · " + " · ".join(macros) if macros else ""
-        source = {"label": "этикетка", "mixed": "смешанные данные", "photo_estimate": "оценка по фото", "none": "без КБЖУ"}.get(row.nutrition_source, row.nutrition_source)
+        source = {"label": "этикетка", "mixed": "смешанные данные", "photo_estimate": "оценка по фото", "text_estimate": "оценка по описанию", "none": "без КБЖУ"}.get(row.nutrition_source, row.nutrition_source)
         confidence = {"high": "высокая", "medium": "средняя", "low": "низкая"}.get(row.confidence, row.confidence)
         lines.append(
             f"- {row.category}: {row.description} ({row.portion_label}){suffix}; "

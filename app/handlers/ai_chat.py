@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, User
 from sqlalchemy import select
 
 from app.db import SessionLocal
@@ -30,6 +30,30 @@ from app.services.tori import reward_tori_interaction
 from app.services.story import advance_week1_if_due, get_or_create_story_progress, initialize_week1_v2, selin_chat_gate
 
 router = Router()
+
+CHAT_IDLE_MINUTES = 45
+
+
+def _should_switch_to_action(text: str) -> bool:
+    """Explicit logging requests should not get trapped in a forgotten chat."""
+    t = text.lower().strip()
+    return t.startswith((
+        "запиши ", "запиши:", "отметь ", "добавь в дневник", "еда:", "напиток:", "шаги:",
+        "съела ", "поела ", "выпила ", "съел ", "выпил ", "купила какао", "купила кофе",
+    ))
+
+
+def _dialog_idle(data: dict) -> bool:
+    from datetime import datetime, timedelta
+    stamp = data.get("last_chat_activity_at")
+    if not stamp:
+        return True  # Old FSM session from before this patch: don't trap the user.
+    try:
+        then = datetime.fromisoformat(str(stamp))
+        return now_local() - then > timedelta(minutes=CHAT_IDLE_MINUTES)
+    except (ValueError, TypeError):
+        return True
+
 
 
 class FreeSelinChatState(StatesGroup):
@@ -144,6 +168,7 @@ async def start_free_chat(callback: CallbackQuery, state: FSMContext) -> None:
         await session.commit()
 
     await state.set_state(FreeSelinChatState.talking)
+    await state.update_data(last_chat_activity_at=now_local().isoformat())
     await send_reaction(
         callback.message,
         "selin",
@@ -162,17 +187,28 @@ async def stop_free_chat(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(FreeSelinChatState.talking, F.text)
-async def free_chat_message(message: Message, state: FSMContext) -> None:
-    user_text = (message.text or "").strip()
+async def free_chat_message(
+    message: Message,
+    state: FSMContext,
+    *,
+    user_text_override: str | None = None,
+    actor_override: User | None = None,
+) -> None:
+    user_text = (user_text_override if user_text_override is not None else (message.text or "")).strip()
+    actor = actor_override or message.from_user
+    if actor_override is None and (_dialog_idle(await state.get_data()) or _should_switch_to_action(user_text)):
+        await state.clear()
+        raise SkipHandler
+    await state.update_data(last_chat_activity_at=now_local().isoformat())
     if not user_text:
         return
     if user_text in NAVIGATION_TEXTS:
-        await message.answer("Сначала закончи свободный разговор кнопкой «🛑 Закончить разговор».")
-        return
+        await state.clear()
+        raise SkipHandler
 
     today = now_local().date()
     async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
+        profile = await get_or_create_profile(session, actor.id, actor.full_name)
         progress = await get_or_create_story_progress(session, profile.id, today)
         initialize_week1_v2(progress, profile, today)
         advance_week1_if_due(progress, today)
@@ -207,7 +243,7 @@ async def free_chat_message(message: Message, state: FSMContext) -> None:
 
     offer = None
     async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
+        profile = await get_or_create_profile(session, actor.id, actor.full_name)
         ai_state = await get_or_create_ai_state(session, profile)
         append_recent_message(ai_state, "user", user_text)
         append_recent_message(ai_state, "assistant", str(result.get("text", "")))
@@ -286,7 +322,7 @@ async def start_initiative_chat(callback: CallbackQuery, state: FSMContext) -> N
         await session.commit()
 
     await state.set_state(InitiativeSelinChatState.talking)
-    await state.update_data(initiative_notification_id=notification_id)
+    await state.update_data(initiative_notification_id=notification_id, last_chat_activity_at=now_local().isoformat())
     await callback.answer()
     # Не плодим промежуточное "я слушаю". Само сообщение Селин уже является
     # началом разговора; после нажатия просто меняем кнопки на завершение.
@@ -351,8 +387,8 @@ async def _handle_initiative_message(
     if not user_text:
         return
     if user_text in NAVIGATION_TEXTS:
-        await message.answer("Сначала закончи разговор кнопкой «🛑 Закончить разговор».")
-        return
+        await state.clear()
+        raise SkipHandler
 
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
@@ -428,7 +464,12 @@ async def _handle_initiative_message(
 
 @router.message(InitiativeSelinChatState.talking, F.text)
 async def initiative_chat_message(message: Message, state: FSMContext) -> None:
-    notification_id = (await state.get_data()).get("initiative_notification_id")
+    data = await state.get_data()
+    if _dialog_idle(data) or _should_switch_to_action(message.text or ""):
+        await state.clear()
+        raise SkipHandler
+    await state.update_data(last_chat_activity_at=now_local().isoformat())
+    notification_id = data.get("initiative_notification_id")
     if not notification_id:
         await state.clear()
         await message.answer("Я потеряла начало разговора. Нажми «Ответить» под сообщением Селин ещё раз.")
@@ -475,7 +516,7 @@ async def recover_initiative_chat(message: Message, state: FSMContext) -> None:
     if await state.get_state() is not None:
         raise SkipHandler
     user_text = (message.text or "").strip()
-    if not user_text or user_text.startswith("/") or user_text in NAVIGATION_TEXTS:
+    if not user_text or user_text.startswith("/") or user_text in NAVIGATION_TEXTS or _should_switch_to_action(user_text):
         raise SkipHandler
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
@@ -494,7 +535,7 @@ async def recover_initiative_chat(message: Message, state: FSMContext) -> None:
     if not notification:
         raise SkipHandler
     await state.set_state(InitiativeSelinChatState.talking)
-    await state.update_data(initiative_notification_id=notification.id)
+    await state.update_data(initiative_notification_id=notification.id, last_chat_activity_at=now_local().isoformat())
     await _handle_initiative_message(message, state, notification.id)
 
 

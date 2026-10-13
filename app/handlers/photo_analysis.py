@@ -26,6 +26,7 @@ from app.services.ai_engine import ai_enabled, analyze_activity_image, analyze_f
 from app.services.ai_features import reserve_ai_call
 from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.assets import send_reaction
+from app.services.achievements import check_achievements, achievement_messages
 from app.services.nutrition import (
     can_scale_by_grams,
     normalize_food_result,
@@ -251,6 +252,7 @@ def _nutrition_source_label(value: str) -> str:
         "label": "по этикетке / КБЖУ",
         "mixed": "по этикетке + фото блюда",
         "photo_estimate": "примерная оценка по фото",
+        "text_estimate": "примерная оценка по описанию",
         "none": "не определён",
     }.get(value, "не определён")
 
@@ -278,11 +280,11 @@ def _food_result_text(result: dict) -> str:
     }
     lines = [
         f"Похоже на: {result.get('summary', 'не получилось уверенно определить')}",
-        f"Что вижу: {items}",
+        f"{'По описанию' if result.get('image_count') == 0 else 'Что вижу'}: {items}",
         f"Категория: {category_labels.get(result.get('category'), 'неясно')}",
     ]
     if result.get("user_comment"):
-        lines.append(f"Учла комментарий: {result['user_comment']}")
+        lines.append(f"Учла описание: {result['user_comment']}")
     lines.extend([
         "",
         f"Источник КБЖУ: {_nutrition_source_label(str(result.get('nutrition_source') or 'none'))}",
@@ -293,7 +295,7 @@ def _food_result_text(result: dict) -> str:
     fat = result.get("fat_g")
     carbs = result.get("carbs_g")
     if any(v is not None for v in (kcal, protein, fat, carbs)):
-        prefix = "≈ " if result.get("nutrition_source") == "photo_estimate" else ""
+        prefix = "≈ " if result.get("nutrition_source") in {"photo_estimate", "text_estimate"} else ""
         lines.append(f"🔥 {prefix}{_fmt_number(kcal, ' ккал')}")
         lines.append(
             f"Б {_fmt_number(protein, ' г')} · Ж {_fmt_number(fat, ' г')} · У {_fmt_number(carbs, ' г')}"
@@ -303,7 +305,7 @@ def _food_result_text(result: dict) -> str:
             lines.append(f"Вес расчёта: {_fmt_number(reference_grams, ' г')}")
         low = result.get("calories_min_kcal")
         high = result.get("calories_max_kcal")
-        if low is not None and high is not None and result.get("nutrition_source") == "photo_estimate":
+        if low is not None and high is not None and result.get("nutrition_source") in {"photo_estimate", "text_estimate"}:
             lines.append(f"Примерный диапазон: {low}–{high} ккал")
 
         p100 = result.get("per_100g_protein_g")
@@ -318,7 +320,7 @@ def _food_result_text(result: dict) -> str:
                 f"{_fmt_number(k100, ' ккал')} · Б {_fmt_number(p100)} · Ж {_fmt_number(f100)} · У {_fmt_number(c100)}"
             )
     else:
-        lines.append("КБЖУ по этому изображению определить не получилось.")
+        lines.append("КБЖУ по этим данным определить не получилось.")
 
     if result.get("basis"):
         lines.append(f"Расчёт: {result['basis']}")
@@ -953,6 +955,12 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
     if text:
         await _finish_result_message(callback.message, text)
         await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+            achievements = await check_achievements(session, profile)
+            await session.commit()
+        for item in achievement_messages(achievements):
+            await callback.message.answer(item)
         advice = await create_intraday_food_feedback(
             callback.from_user.id,
             callback.from_user.full_name,
@@ -996,6 +1004,12 @@ async def accept_food_grams(message: Message, state: FSMContext) -> None:
     if text:
         await send_reaction(message, "selin", "smirk", text)
         await check_and_notify_challenges(message, message.from_user.id, message.from_user.full_name)
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
+            achievements = await check_achievements(session, profile)
+            await session.commit()
+        for item in achievement_messages(achievements):
+            await message.answer(item)
         advice = await create_intraday_food_feedback(
             message.from_user.id,
             message.from_user.full_name,

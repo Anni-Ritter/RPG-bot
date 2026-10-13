@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, User
@@ -137,7 +138,9 @@ async def tori_action(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "torichat:free")
 async def start_tori_free(callback: CallbackQuery, state: FSMContext) -> None:
+    from app.services.ai_features import now_local
     await state.set_state(FreeToriChatState.talking)
+    await state.update_data(last_chat_activity_at=now_local().isoformat())
     await callback.answer()
     await replace_reaction(
         callback.message,
@@ -166,7 +169,10 @@ async def tori_free_message(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if not text:
         return
-    if text in NAVIGATION_TEXTS:
-        await message.answer("Сначала закончи взаимодействие с Тори кнопкой «🛑 Закончить».")
-        return
+    from app.handlers.ai_chat import _dialog_idle, _should_switch_to_action
+    from app.services.ai_features import now_local
+    if text in NAVIGATION_TEXTS or _dialog_idle(await state.get_data()) or _should_switch_to_action(text):
+        await state.clear()
+        raise SkipHandler
+    await state.update_data(last_chat_activity_at=now_local().isoformat())
     await _tori_response(message, text, "free")

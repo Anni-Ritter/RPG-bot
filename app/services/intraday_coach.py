@@ -22,6 +22,7 @@ def _entries_text(rows) -> str:
         "label": "этикетка",
         "mixed": "этикетка/комментарий/фото",
         "photo_estimate": "оценка по фото",
+        "text_estimate": "примерная оценка по тексту",
         "none": "без точных КБЖУ",
     }
     for row in rows:

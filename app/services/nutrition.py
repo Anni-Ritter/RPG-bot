@@ -90,7 +90,7 @@ def normalize_food_result(raw: dict[str, Any]) -> dict[str, Any]:
     low = _number(result.get("calories_min_kcal"))
     high = _number(result.get("calories_max_kcal"))
     best = _number(result.get("calories_kcal"))
-    if best is not None and low is None and high is None and result.get("nutrition_source") == "photo_estimate":
+    if best is not None and low is None and high is None and result.get("nutrition_source") in {"photo_estimate", "text_estimate"}:
         # This is only an uncertainty band around the model's own estimate.
         result["calories_min_kcal"] = max(0, int(round(best * 0.85)))
         result["calories_max_kcal"] = int(round(best * 1.15))

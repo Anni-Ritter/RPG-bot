@@ -136,6 +136,7 @@ def wardrobe_menu(chests: int) -> InlineKeyboardMarkup:
     buttons.extend(
         [
             [InlineKeyboardButton(text="🖼 Листать свитки", callback_data="wardrobe:list")],
+            [InlineKeyboardButton(text="📚 Каталог и прогресс", callback_data="wardrobe:catalog:a:0")],
             [InlineKeyboardButton(text="🎨 Галерея артов", callback_data="wc:g:0"),
              InlineKeyboardButton(text="💜 Избранное", callback_data="wc:v:0")],
             [InlineKeyboardButton(text="🪙 Ателье", callback_data="shop:atelier")],
@@ -199,7 +200,8 @@ def dust_shop_menu(dust: int) -> InlineKeyboardMarkup:
 def quest_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Новый квест", callback_data="quest:new")],
+            [InlineKeyboardButton(text="🎲 Маленькое дело от Селин", callback_data="quest:ai_suggest")],
+            [InlineKeyboardButton(text="➕ Создать свой (необязательно)", callback_data="quest:new")],
             [InlineKeyboardButton(text="📋 Активные", callback_data="quest:list")],
         ]
     )

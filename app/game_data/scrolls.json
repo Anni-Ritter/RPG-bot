@@ -499,5 +499,196 @@
     "prompt": "white black and silver final ritual dress, layered long cape, glowing seal lines across fabric, fitted sheer sleeves, moonstone chest ornament, floating ribbon details, fractured halo headpiece, majestic ominous elegance",
     "source": "story",
     "is_secret": false
+  },
+  {
+    "id": "s33",
+    "name": "Билет на зеркальный бал",
+    "rarity": "common",
+    "item_type": "accessory",
+    "collection": "Зеркальный бал",
+    "chapter": 2,
+    "tags": [
+      "silver",
+      "mask",
+      "ribbon"
+    ],
+    "prompt": "thin silver masquerade half mask, black velvet ribbon straps, pearl stud earrings, small mirrored silver charms, delicate lace collar, elegant evening gothic style",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s34",
+    "name": "Чернильный танец",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Зеркальный бал",
+    "chapter": 2,
+    "tags": [
+      "ballroom",
+      "velvet",
+      "silver"
+    ],
+    "prompt": "black velvet ballroom dress, fitted silver embroidered corset, layered asymmetric skirt, off shoulder sleeves, long satin gloves, small mirror-shaped gemstone brooch, thin silver waist chains",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s35",
+    "name": "Осколки на запястьях",
+    "rarity": "common",
+    "item_type": "accessory",
+    "collection": "Зеркальный бал",
+    "chapter": 2,
+    "tags": [
+      "gloves",
+      "mirrors"
+    ],
+    "prompt": "translucent black lace gloves, tiny reflective crystal shards embroidered at wrists, narrow silver bracelets, short ribbon bows, fine chain details, refined ballroom accessory",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s36",
+    "name": "Королева отражений",
+    "rarity": "legendary",
+    "item_type": "outfit",
+    "collection": "Зеркальный бал",
+    "chapter": 2,
+    "tags": [
+      "mirror",
+      "ceremony",
+      "moon"
+    ],
+    "prompt": "dramatic black and ivory ceremonial gown, structured silver mirror corset, long split layered skirt, floating translucent sleeves, fractured glass halo, moonstone waist clasp, thin crystal chains, elegant dramatic silhouette",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s37",
+    "name": "Алхимические записи",
+    "rarity": "common",
+    "item_type": "outfit",
+    "collection": "Городская алхимия",
+    "chapter": 2,
+    "tags": [
+      "city",
+      "alchemist",
+      "jacket"
+    ],
+    "prompt": "short charcoal fitted jacket, cream ruffled blouse, burgundy pleated skirt, tiny potion vial belt, brass clasp details, black leather gloves, narrow lace cravat, elegant urban alchemist clothing",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s38",
+    "name": "Маленький ревизор",
+    "rarity": "common",
+    "item_type": "tori",
+    "collection": "Городская алхимия",
+    "chapter": 2,
+    "tags": [
+      "tori",
+      "satchel",
+      "brass"
+    ],
+    "prompt": "small white fox familiar, tiny burgundy leather satchel, brass key charm on collar, miniature dark waistcoat, curious alert eyes, tiny round goggles resting above ears, adorable fantasy alchemist companion",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s39",
+    "name": "Пыль латунных часов",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Городская алхимия",
+    "chapter": 2,
+    "tags": [
+      "clockwork",
+      "brass",
+      "laced"
+    ],
+    "prompt": "dark burgundy tailored mini dress, antique brass gear embroidery, high lace collar, fitted leather waist corset, translucent puff sleeves, dangling clock key charms, black knee ribbons, refined clockwork city fashion",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s40",
+    "name": "Пробирки и кружева",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Городская алхимия",
+    "chapter": 2,
+    "tags": [
+      "alchemy",
+      "crystal",
+      "atelier"
+    ],
+    "prompt": "ivory and deep wine layered chemise dress, translucent asymmetric overskirt, black corset lacing, glowing violet glass vial pendants, brass clasps, delicate gloves, narrow choker, ornate alchemist workshop fashion",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s41",
+    "name": "Тихий снегопад",
+    "rarity": "common",
+    "item_type": "accessory",
+    "collection": "Зимний павильон",
+    "chapter": 2,
+    "tags": [
+      "snow",
+      "shawl",
+      "ivory"
+    ],
+    "prompt": "soft ivory knitted shoulder shawl, pale blue satin ties, tiny snowflake silver pins, white fur wrist cuffs, translucent crystal beads, delicate winter lace details",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s42",
+    "name": "Письмо в иней",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Зимний павильон",
+    "chapter": 2,
+    "tags": [
+      "winter",
+      "blue",
+      "fur"
+    ],
+    "prompt": "midnight blue winter dress, white fur-trimmed short cape, fitted velvet bodice, silver snowflake embroidery, long lace-up boots, icy blue gemstone brooch, thin silver hair ribbons",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s43",
+    "name": "Серебряный сумрак",
+    "rarity": "rare",
+    "item_type": "outfit",
+    "collection": "Зимний павильон",
+    "chapter": 2,
+    "tags": [
+      "ice",
+      "grey",
+      "veil"
+    ],
+    "prompt": "charcoal grey layered winter gown, sheer smoky veil sleeves, ivory pleated underskirt, narrow fur collar, silver braided waist belt, pearl snow charms, black long gloves, elegant cold twilight style",
+    "source": "chest",
+    "is_secret": false
+  },
+  {
+    "id": "s44",
+    "name": "Сердце метели",
+    "rarity": "epic",
+    "item_type": "outfit",
+    "collection": "Зимний павильон",
+    "chapter": 2,
+    "tags": [
+      "snowstorm",
+      "ice",
+      "ceremony"
+    ],
+    "prompt": "long pale blue and black ceremonial winter gown, crystalline corset ornament, layered translucent snowflake overskirt, white fur shoulder cape, floating silver ribbons, glacier gemstone necklace, intricate snow crown headpiece",
+    "source": "chest",
+    "is_secret": false
   }
 ]

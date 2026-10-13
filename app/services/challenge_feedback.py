@@ -7,6 +7,7 @@ from aiogram.types import Message
 
 from app.db import SessionLocal
 from app.services.assets import send_reaction
+from app.services.achievements import check_achievements, achievement_messages
 from app.services.challenges import challenge_state, evaluate_plan, get_plan, now_local
 from app.services.rewards import get_or_create_profile
 
@@ -57,6 +58,7 @@ async def check_and_notify_challenges(
 
         reward_xp = int(plan.reward_xp or 0) * len(items)
         reward_coins = int(plan.reward_coins or 0) * len(items)
+        unlocked = await check_achievements(session, profile)
         await session.commit()
 
     if not items:
@@ -75,6 +77,8 @@ async def check_and_notify_challenges(
     lines.append("— Вот. Теперь это можно считать закрытым.")
 
     await send_reaction(message, "selin", "triumphant", "\n".join(lines))
+    for unlocked_text in achievement_messages(unlocked):
+        await message.answer(unlocked_text)
     return {
         "items": items,
         "reward_xp": reward_xp,

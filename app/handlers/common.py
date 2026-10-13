@@ -109,6 +109,8 @@ async def today(message: Message) -> None:
         initialize_week1_v2(progress, profile, today_date)
         advance_week1_if_due(progress, today_date)
         workout_week = await weekly_workout_summary(session, profile.id, today_date)
+        from app.services.ai_features import build_ai_context
+        training_context = await build_ai_context(session, profile)
         nutrition = await daily_nutrition_totals(session, profile.id, today_date)
         treats = await daily_treat_count(session, profile.id, today_date)
         calorie_target = await get_calorie_target(session, profile.id)
@@ -167,7 +169,8 @@ async def today(message: Message) -> None:
             f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks} · 🍰 Вкусняшки: {treats}\n"
             f"🥤 Напитки: {stat.drinks} · 💧 Гидратация: {stat.water} · ⚡ Энергетики: {stat.energy_drinks}\n"
             f"🚶 Шаги: {stat.steps:,}{nutrition_line}\n"
-            f"🏋️ Тренировки за неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
+            f"🏋️ Сегодня: {training_context['workouts_today_count']} трен. · {training_context['workout_types_today']}\n"
+            f"🏋️ За неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
             f"Ателье: {profile.coins} монет · {profile.atelier_dust} Пыли · {profile.trial_chests} сундуков"
         ).replace(",", " "),
     )
@@ -177,9 +180,12 @@ async def today(message: Message) -> None:
 async def achievements(message: Message) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
+        unlocked = await check_achievements(session, profile)
         rows = await achievement_catalog(session, profile)
         await session.commit()
     await message.answer(achievement_catalog_text(rows))
+    for item in achievement_messages(unlocked):
+        await message.answer(item)
 
 
 @router.message(F.text == "🍽 Еда")
@@ -504,6 +510,57 @@ async def quests(message: Message) -> None:
 async def quest_menu_back(callback: CallbackQuery) -> None:
     await replace_text_view(callback.message, "Пользовательские квесты:", reply_markup=quest_menu())
     await callback.answer()
+
+
+@router.callback_query(F.data == "quest:ai_suggest")
+async def suggest_quest_from_selin(callback: CallbackQuery) -> None:
+    from app.services.ai_engine import suggest_mini_quest
+    from app.services.ai_features import (
+        build_ai_context, can_offer_ai_quest, create_ai_quest_offer, reserve_ai_call,
+    )
+    from app.keyboards import ai_quest_offer_menu
+    if not ai_enabled():
+        await callback.answer("Селин пока не может придумывать задания без AI.", show_alert=True)
+        return
+    today = now_local().date()
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        can_offer = await can_offer_ai_quest(session, profile.id, today)
+        allowed = can_offer and await reserve_ai_call(session, profile.id, "initiative")
+        context = await build_ai_context(session, profile) if allowed else {}
+        await session.commit()
+    if not can_offer:
+        await callback.answer("Сегодня Селин уже предлагала задание. Завтра можно попросить новое.", show_alert=True)
+        return
+    if not allowed:
+        await callback.answer("AI временно недоступен.", show_alert=True)
+        return
+    await callback.answer()
+    await replace_text_view(callback.message, "⏳ Селин придумывает небольшое дело на сегодня…")
+    try:
+        proposed = await suggest_mini_quest(context=context)
+    except Exception as exc:
+        print("[QUEST] mini quest error", repr(exc))
+        await replace_text_view(callback.message, "Не получилось придумать квест. Можно попробовать позже.", reply_markup=quest_menu())
+        return
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        # Protect against repeated callbacks and another simultaneous offer.
+        if not await can_offer_ai_quest(session, profile.id, today):
+            await replace_text_view(callback.message, "На сегодня задание уже предложено.", reply_markup=quest_menu())
+            return
+        offer = await create_ai_quest_offer(
+            session, profile,
+            title=str(proposed.get("title") or "Маленькое полезное дело")[:120],
+            difficulty=str(proposed.get("difficulty") or "easy"),
+            reason=str(proposed.get("reason") or "")[:240],
+        )
+        await session.commit()
+    await replace_text_view(
+        callback.message,
+        f"📜 Предложение Селин: {offer.title}\n{offer.reason}\n\nНаграда: +{offer.reward_xp} XP · +{offer.reward_coins} монеты. Брать не обязательно.",
+        reply_markup=ai_quest_offer_menu(offer.id),
+    )
 
 
 @router.callback_query(F.data == "quest:new")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DailyStat, GameEvent, UserAchievement, UserProfile
+from app.models import DailyStat, FoodNutritionLog, GameEvent, UserAchievement, UserProfile
 from app.services.scrolls import grant_scroll
 
 
@@ -86,6 +86,67 @@ ACHIEVEMENTS = {
         "target": 4,
     },
 }
+
+
+# Short-term achievements supplement the existing long-term milestones.
+# Existing codes and unlocked achievements never change.
+ACHIEVEMENTS.update({
+    "first_3k": {
+        "title": "Размяла ноги", "category": "🚶 Шаги",
+        "condition": "Пройти 3 000 шагов за день.", "reward_text": "+5 монет",
+        "coins": 5, "progress_kind": "best_steps", "target": 3000,
+    },
+    "first_7k": {
+        "title": "Разведка удалась", "category": "🚶 Шаги",
+        "condition": "Пройти 7 000 шагов за день.", "reward_text": "+12 монет",
+        "coins": 12, "progress_kind": "best_steps", "target": 7000,
+    },
+    "tori_bond_5": {
+        "title": "Любопытный хвост", "category": "🦊 Тори",
+        "condition": "Довести связь с Тори до 5.", "reward_text": "+5 монет",
+        "coins": 5, "progress_kind": "tori_bond", "target": 5,
+    },
+    "tori_bond_15": {
+        "title": "Уже почти свои", "category": "🦊 Тори",
+        "condition": "Довести связь с Тори до 15.", "reward_text": "+12 монет",
+        "coins": 12, "progress_kind": "tori_bond", "target": 15,
+    },
+    "manual_3": {
+        "title": "Арена становится привычкой", "category": "🏋️ Тренировки",
+        "condition": "Записать 3 самостоятельные тренировки.", "reward_text": "+15 монет",
+        "coins": 15, "progress_kind": "event_count", "event_type": "manual_workout_complete", "target": 3,
+    },
+    "hydration_1": {
+        "title": "Припасы пополнены", "category": "🥤 Повседневное",
+        "condition": "Записать первую гидратацию (вода или zero).", "reward_text": "+3 монеты",
+        "coins": 3, "progress_kind": "event_count", "event_type": "hydration", "target": 1,
+    },
+    "hydration_10": {
+        "title": "Фляга всегда под рукой", "category": "🥤 Повседневное",
+        "condition": "Получить награду за гидратацию 10 раз (за всё время).", "reward_text": "+10 монет",
+        "coins": 10, "progress_kind": "event_count", "event_type": "hydration", "target": 10,
+    },
+    "food_log_1": {
+        "title": "Первая запись в журнале", "category": "🍲 Питание",
+        "condition": "Записать еду/напиток с описанием или фото и подтвердить порцию.",
+        "reward_text": "+5 монет", "coins": 5, "progress_kind": "food_entry_count", "target": 1,
+    },
+    "food_log_5": {
+        "title": "Журнал припасов", "category": "🍲 Питание",
+        "condition": "Записать 5 порций еды/напитков с описанием или фото.",
+        "reward_text": "+12 монет", "coins": 12, "progress_kind": "food_entry_count", "target": 5,
+    },
+    "challenge_1": {
+        "title": "Первое испытание", "category": "🎯 Испытания",
+        "condition": "Завершить один ежедневный челлендж.", "reward_text": "+7 монет",
+        "coins": 7, "progress_kind": "event_count", "event_type": "daily_challenge_complete", "target": 1,
+    },
+    "challenge_3": {
+        "title": "Серия заданий", "category": "🎯 Испытания",
+        "condition": "Выполнить три ежедневных челленджа за всё время.", "reward_text": "+15 монет",
+        "coins": 15, "progress_kind": "event_count", "event_type": "daily_challenge_complete", "target": 3,
+    },
+})
 
 
 
@@ -183,6 +244,31 @@ async def check_achievements(
         if item:
             unlocked.append(item)
 
+    # Shorter, progressively unlockable milestones (no resets or daily grind).
+    best_steps = int(await session.scalar(
+        select(func.max(DailyStat.steps)).where(DailyStat.user_id == profile.id)
+    ) or 0)
+    food_logs = int(await session.scalar(
+        select(func.count(FoodNutritionLog.id)).where(FoodNutritionLog.user_id == profile.id)
+    ) or 0)
+    checks = {
+        "first_3k": best_steps >= 3000 or (steps is not None and steps >= 3000),
+        "first_7k": best_steps >= 7000 or (steps is not None and steps >= 7000),
+        "tori_bond_5": profile.tori_bond >= 5,
+        "tori_bond_15": profile.tori_bond >= 15,
+        "manual_3": await _count_events(session, profile.id, "manual_workout_complete") >= 3,
+        "hydration_1": await _count_events(session, profile.id, "hydration") >= 1,
+        "hydration_10": await _count_events(session, profile.id, "hydration") >= 10,
+        "food_log_1": food_logs >= 1,
+        "food_log_5": food_logs >= 5,
+        "challenge_1": await _count_events(session, profile.id, "daily_challenge_complete") >= 1,
+        "challenge_3": await _count_events(session, profile.id, "daily_challenge_complete") >= 3,
+    }
+    for code, achieved in checks.items():
+        if achieved:
+            item = await _unlock(session, profile, code)
+            if item:
+                unlocked.append(item)
     return unlocked
 
 
@@ -204,6 +290,9 @@ async def achievement_catalog(
     )
     event_cache: dict[str, int] = {}
     rows: list[dict] = []
+    food_entry_count = int(await session.scalar(
+        select(func.count(FoodNutritionLog.id)).where(FoodNutritionLog.user_id == profile.id)
+    ) or 0)
 
     for code, spec in ACHIEVEMENTS.items():
         kind = spec.get("progress_kind")
@@ -217,6 +306,9 @@ async def achievement_catalog(
         elif kind == "tori_bond":
             current = min(profile.tori_bond, target)
             progress_label = f"{current} / {target} связи"
+        elif kind == "food_entry_count":
+            current = min(food_entry_count, target)
+            progress_label = f"{current} / {target} записей"
         elif kind == "event_count":
             event_type = str(spec.get("event_type", ""))
             if event_type not in event_cache:
@@ -245,7 +337,7 @@ def achievement_catalog_text(rows: list[dict]) -> str:
         "Условия не скрыты: можно заранее посмотреть, к чему идти. Награда выдаётся автоматически, когда условие выполнено.",
     ]
 
-    category_order = ["🚶 Шаги", "🏋️ Тренировки", "🦊 Тори"]
+    category_order = ["🚶 Шаги", "🏋️ Тренировки", "🍲 Питание", "🥤 Повседневное", "🦊 Тори", "🎯 Испытания"]
     categories = {name: [] for name in category_order}
     other: list[dict] = []
     for row in rows:

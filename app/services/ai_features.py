@@ -20,6 +20,7 @@ from app.models import (
     UserMemory,
     UserNutritionGoal,
     UserProfile,
+    WorkoutSession,
 )
 from app.services.coach_defaults import DEFAULT_COACH_RULES
 from app.services.levels import level_from_xp
@@ -353,6 +354,25 @@ async def build_ai_context(session: AsyncSession, profile: UserProfile) -> dict:
     day = story_day(progress, today)
     calorie_target = await get_calorie_target(session, profile.id)
     calorie_delta = int(nutrition["calories_kcal"]) - calorie_target
+    planned_workouts = list((await session.scalars(
+        select(WorkoutSession).where(
+            WorkoutSession.user_id == profile.id,
+            WorkoutSession.workout_date == today,
+            WorkoutSession.status == "completed",
+            WorkoutSession.kind.in_(["monday", "thursday_first", "thursday_bonus"]),
+        )
+    )).all())
+    manual_events = list((await session.scalars(
+        select(GameEvent).where(
+            GameEvent.user_id == profile.id,
+            GameEvent.event_type == "manual_workout_complete",
+        )
+    )).all())
+    manual_today = [e for e in manual_events if (e.payload or {}).get("workout_date") == today.isoformat()]
+    activity_minutes = sum(max(0, int((e.payload or {}).get("minutes") or 0)) for e in manual_today)
+    workout_count = len(manual_today) + len(planned_workouts)
+    workout_types = [str((e.payload or {}).get("kind_label") or "самостоятельная") for e in manual_today]
+    workout_types += [{"monday": "зал, понедельник", "thursday_first": "зал, первая", "thursday_bonus": "зал, вторая"}.get(w.kind, w.kind) for w in planned_workouts]
     return {
         "name": profile.display_name or "Проводник",
         "story_day": day,
@@ -382,6 +402,10 @@ async def build_ai_context(session: AsyncSession, profile: UserProfile) -> dict:
         "nutrition_protein": nutrition["protein_g"],
         "nutrition_fat": nutrition["fat_g"],
         "nutrition_carbs": nutrition["carbs_g"],
+        "workouts_today_count": workout_count,
+        "workout_manual_minutes_today": activity_minutes,
+        "workout_types_today": ", ".join(workout_types) or "нет записей",
+        "has_training_today": bool(workout_count),
         "memories": await user_memory_text(session, profile.id),
         "coach_rules": await get_coach_rules(session, profile.id),
         "previous_focus": (previous_review.tomorrow_focus or "").strip() if previous_review else "",

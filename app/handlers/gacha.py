@@ -116,6 +116,68 @@ async def _send_wardrobe_menu(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("wardrobe:catalog:"))
+async def wardrobe_catalog(callback: CallbackQuery) -> None:
+    """Display the full finite pool without revealing any prompt or attached art."""
+    try:
+        _, _, section, raw_page = callback.data.split(":", 3)
+        page = max(0, int(raw_page))
+    except (ValueError, AttributeError):
+        section, page = "a", 0
+    valid = {"a", "s", "t", "b"}
+    if section not in valid:
+        section = "a"
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+        scrolls = list((await session.scalars(select(ScrollDefinition).order_by(
+            ScrollDefinition.collection, ScrollDefinition.name,
+        ))).all())
+        owned = await _owned_ids(session, profile.id)
+        await session.commit()
+    # Outfits and accessory accents both become full character images in Stable Waifu.
+    relevant = [x for x in scrolls if (section == "a" or (
+        section == "s" and x.item_type in {"outfit", "accessory"}) or
+        (section == "t" and x.item_type == "tori") or
+        (section == "b" and x.item_type == "background")
+    )]
+    total = len(relevant)
+    owned_count = len([x for x in relevant if x.id in owned])
+    overall = len(scrolls)
+    character = len([x for x in scrolls if x.item_type in {"outfit", "accessory"}])
+    tori = len([x for x in scrolls if x.item_type == "tori"])
+    backgrounds = len([x for x in scrolls if x.item_type == "background"])
+    chest_pool = len([x for x in scrolls if x.source == "chest"])
+    per_page = 10
+    page_count = max(1, (total + per_page - 1) // per_page)
+    page = min(page, page_count - 1)
+    lines = [
+        "📚 Каталог Ателье",
+        f"Всего концептов: {overall} · для Селин: {character} · для Тори: {tori} · фоны: {backgrounds}",
+        f"Получено всего: {len(owned)}/{overall} · в сундуках: {chest_pool}",
+        f"В разделе: {owned_count}/{total} · страница {page+1}/{page_count}",
+        "",
+        "✅ уже получено · 🔒 пока нет. Названия видны, промпты — только после получения и раскрытия.",
+        "",
+    ]
+    for scroll in relevant[page * per_page:(page + 1) * per_page]:
+        status = "✅" if scroll.id in owned else "🔒"
+        # Leave special story rewards mysterious until the player gets them.
+        name = scroll.name if scroll.id in owned or not scroll.is_secret else "Секретный свиток"
+        lines.append(f"{status} {name} · {scroll.rarity.title()} · {scroll.collection}")
+    def btn(label: str, sec: str, pos: int = 0):
+        return InlineKeyboardButton(text=label, callback_data=f"wardrobe:catalog:{sec}:{pos}")
+    keyboard = [
+        [btn("Все", "a"), btn("Селин", "s"), btn("Тори", "t"), btn("Фоны", "b")],
+        [btn("⬅️", section, page - 1) if page else InlineKeyboardButton(text="·", callback_data="noop"),
+         InlineKeyboardButton(text=f"{page+1}/{page_count}", callback_data="noop"),
+         btn("➡️", section, page + 1) if page + 1 < page_count else InlineKeyboardButton(text="·", callback_data="noop")],
+        [InlineKeyboardButton(text="🖼 Мои свитки", callback_data="wardrobe:list")],
+        [InlineKeyboardButton(text="⬅️ Гардероб", callback_data="wardrobe:menu")],
+    ]
+    await replace_text_view(callback.message, "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await callback.answer()
+
+
 @router.callback_query(F.data == "wardrobe:menu")
 async def wardrobe_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
