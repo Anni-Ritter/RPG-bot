@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import asyncio
 from io import BytesIO
 from datetime import datetime
@@ -42,6 +44,8 @@ from app.services.self_workouts import (
 from app.services.steps import evaluate_steps
 from app.services.hydration import record_hydration
 from app.services.intraday_coach import create_intraday_food_feedback
+
+logger = logging.getLogger("selin_tori.photo_ai")
 
 router = Router()
 TZ = ZoneInfo(settings.timezone)
@@ -368,24 +372,41 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
         state,
         "Смотрю изображение…" if count == 1 else f"Смотрю изображения: {count} шт.…",
     )
+    stage = "Telegram: получение изображений"
+    logger.info("[PHOTO_AI] start kind=%s count=%d", kind, count)
     try:
         images: list[tuple[bytes, str]] = []
         for index, file_id in enumerate(file_ids[:count]):
             mime = mime_types[index] if index < len(mime_types) else "image/jpeg"
             images.append((await _download_telegram_photo(message.bot, file_id), mime))
+        logger.info("[PHOTO_AI] downloaded count=%d", len(images))
 
+        stage = "OpenAI: анализ и структурированный ответ"
+        logger.info("[PHOTO_AI] requesting model kind=%s", kind)
         if kind == "food":
             comment = str(data.get("food_comment") or "").strip()
             result = normalize_food_result(await analyze_food_images(images, user_comment=comment))
             result["user_comment"] = comment
         else:
             result = await analyze_activity_image(images[0][0], images[0][1])
+        logger.info("[PHOTO_AI] received result kind=%s", kind)
     except Exception as exc:
-        print("AI image analysis error:", repr(exc))
+        # Log the stage and HTTP status without logging user photos, captions,
+        # Telegram file identifiers or API secrets.
+        status = getattr(exc, "status_code", None)
+        error_type = type(exc).__name__
+        logger.exception(
+            "[PHOTO_AI] failed stage=%s error=%s http_status=%s",
+            stage, error_type, status,
+        )
+        print(f"[PHOTO_AI] failed at {stage}: {error_type}, HTTP={status}", flush=True)
         await _edit_flow_message(
             message,
             state,
-            "Не получилось распознать изображение. Попробуй ещё раз позже или отметь вручную.",
+            "Не получилось распознать изображение. "
+            f"Этап: {stage}. Ошибка: {error_type}. "
+            "Если повторится, проверь в Bothost строку [PHOTO_AI]. "
+            "Можно попробовать ещё раз или отметить вручную.",
         )
         await state.clear()
         return

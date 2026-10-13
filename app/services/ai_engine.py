@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 from typing import Any
 
@@ -79,7 +80,7 @@ FOOD_SCHEMA = {
         "drink_kind": {"type": "string", "enum": ["plain", "caloric", "energy", "unknown"]},
         "items": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-        "nutrition_source": {"type": "string", "enum": ["label", "mixed", "photo_estimate", "text_estimate", "none"]},
+        "nutrition_source": {"type": "string", "enum": ["label", "mixed", "photo_estimate", "none"]},
         "reference_grams": {"type": ["number", "null"]},
         "calories_kcal": {"type": ["number", "null"]},
         "calories_min_kcal": {"type": ["integer", "null"]},
@@ -117,6 +118,14 @@ FOOD_SCHEMA = {
     ],
     "additionalProperties": False,
 }
+
+
+# Keep the photo-recognition schema unchanged from V21. V22 added a new
+# nutrition_source value for text-only entries, but photo recognition must not
+# share a modified schema name with the old deployed image response format.
+FOOD_TEXT_SCHEMA = copy.deepcopy(FOOD_SCHEMA)
+FOOD_TEXT_SCHEMA["properties"]["nutrition_source"]["enum"].insert(-1, "text_estimate")
+
 
 ACTIVITY_SCHEMA = {
     "type": "object",
@@ -346,7 +355,10 @@ async def _structured_response(*, system: str, user_content: Any, schema_name: s
             return result
         last_error = TypeError("OpenAI structured output is not a JSON object")
 
-    raise RuntimeError("OpenAI did not return valid structured output after retry") from last_error
+    error_detail = f"{type(last_error).__name__}: {str(last_error)[:350]}" if last_error else "unknown"
+    raise RuntimeError(
+        f"OpenAI structured output failed ({schema_name}, {error_detail})"
+    ) from last_error
 
 
 async def generate_selin_reply(
@@ -504,8 +516,8 @@ confidence=low, nutrition_source=text_estimate. Не выдавай число �
     return await _structured_response(
         system=system,
         user_content=f"Запиши по описанию (только одна порция): {description[:2000]}",
-        schema_name="food_text_analysis_v22",
-        schema=FOOD_SCHEMA,
+        schema_name="food_text_analysis_v23",
+        schema=FOOD_TEXT_SCHEMA,
         max_tokens=670,
     )
 
