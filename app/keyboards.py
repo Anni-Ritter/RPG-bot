@@ -10,7 +10,7 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
             [KeyboardButton(text="📖 История"), KeyboardButton(text="💬 Селин")],
             [KeyboardButton(text="🦊 Тори"), KeyboardButton(text="📷 Анализ фото")],
-            [KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="🏆 Ачивки"), KeyboardButton(text="📊 Анализ питания")],
         ],
         resize_keyboard=True,
     )
@@ -61,6 +61,7 @@ def food_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🥤 Напиток / гидратация", callback_data="food:drink"),
             ],
             [InlineKeyboardButton(text="📖 Книга припасов", callback_data="recipe:menu")],
+            [InlineKeyboardButton(text="📊 Анализ питания за несколько дней", callback_data="nutritionhistory:menu")],
             [InlineKeyboardButton(text="🔁 Повторить последнюю запись", callback_data="recipe:last")],
             [InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation")],
         ]
