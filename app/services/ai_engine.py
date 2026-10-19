@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import copy
 import json
 from typing import Any
 
@@ -119,14 +118,6 @@ FOOD_SCHEMA = {
     "additionalProperties": False,
 }
 
-
-# Keep the photo-recognition schema unchanged from V21. V22 added a new
-# nutrition_source value for text-only entries, but photo recognition must not
-# share a modified schema name with the old deployed image response format.
-FOOD_TEXT_SCHEMA = copy.deepcopy(FOOD_SCHEMA)
-FOOD_TEXT_SCHEMA["properties"]["nutrition_source"]["enum"].insert(-1, "text_estimate")
-
-
 ACTIVITY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -165,7 +156,6 @@ CHALLENGE_SCHEMA = {
                         "enum": [
                             "steps", "water", "meals", "workout", "food_logs",
                             "treat_limit", "energy_limit", "protein_meals",
-                            "tori_bond", "tori_interactions", "willpower_actions", "quests",
                         ],
                     },
                     "title": {"type": "string"},
@@ -221,35 +211,10 @@ def ai_enabled() -> bool:
     return bool(settings.openai_api_key)
 
 
-def _client(*, timeout: float = 45.0) -> AsyncOpenAI:
+def _client() -> AsyncOpenAI:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
-    return AsyncOpenAI(api_key=settings.openai_api_key, timeout=timeout, max_retries=1)
-
-
-def _response_output_text(response: Any) -> str:
-    """Prefer SDK output_text, but also collect text parts manually.
-
-    Reasoning models sometimes leave output_text empty while the JSON is
-    already present in message content, especially on incomplete responses.
-    """
-    direct = (getattr(response, "output_text", None) or "").strip()
-    if direct:
-        return direct
-
-    chunks: list[str] = []
-    for item in getattr(response, "output", None) or []:
-        item_type = getattr(item, "type", None)
-        if item_type == "message":
-            for part in getattr(item, "content", None) or []:
-                text = getattr(part, "text", None)
-                if text:
-                    chunks.append(str(text))
-        elif item_type in {"output_text", "text"}:
-            text = getattr(item, "text", None)
-            if text:
-                chunks.append(str(text))
-    return "\n".join(chunks).strip()
+    return AsyncOpenAI(api_key=settings.openai_api_key, timeout=45.0, max_retries=1)
 
 
 def _known_story_context(day: int) -> str:
@@ -266,24 +231,6 @@ def _known_story_context(day: int) -> str:
         facts.append("Сила и Воля Проводника иногда дают Селин дополнительные варианты действий.")
     if day >= 5:
         facts.append("Селин постепенно привыкает к Проводнику, но всё ещё осторожно говорит о личном прошлом.")
-    if day >= 9:
-        facts.append("Селин и Тори вышли из руин и идут через лес в сторону Таррена.")
-    if day >= 14:
-        facts.append("Селин нашла собственную запись трёхлетней давности, ведущую в Таррен.")
-    if day >= 15:
-        facts.append("В лесу Селин столкнулась с существом, которое пыталось заманить её обещанием вернуть память.")
-    if day >= 18:
-        facts.append("В Таррене нашлась архивная запись: Селин Арвен была картографом Круга Авелин и официально погибла три года назад при закрытии Шпиля.")
-    if day >= 19:
-        facts.append("Один из людей прошлого Селин назвал её предательницей и обвинил в том, что люди остались внутри Шпиля.")
-    if day >= 21:
-        facts.append("Селин выяснила, что незадолго до закрытия Шпиля сама покупала реагенты для работы с памятью.")
-    if day >= 24:
-        facts.append("Селин нашла сообщение от самой себя: потеря памяти была частью её собственного плана, а не случайностью.")
-    if day >= 25:
-        facts.append("Печать нельзя было навязать: Селин согласилась стать её носителем добровольно и сохранила право отказаться.")
-    if day >= 27:
-        facts.append("Тори нашёл воспоминание о темноволосой женщине, которую Селин точно знала раньше, но пока не помнит её имени.")
     return " ".join(facts)
 
 
@@ -344,74 +291,43 @@ def _selin_system(context: dict[str, Any], *, can_offer_quest: bool) -> str:
 """.strip()
 
 
-async def _structured_response(
-    *,
-    system: str,
-    user_content: Any,
-    schema_name: str,
-    schema: dict,
-    max_tokens: int = 350,
-    timeout: float = 45.0,
-) -> dict:
-    client = _client(timeout=timeout)
+async def _structured_response(*, system: str, user_content: Any, schema_name: str, schema: dict, max_tokens: int = 350) -> dict:
+    client = _client()
     last_error: Exception | None = None
-    token_budget = max_tokens
 
-    for attempt in range(3):
-        try:
-            response = await client.responses.create(
-                model=settings.openai_model,
-                input=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_content},
-                ],
-                max_output_tokens=token_budget,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": schema_name,
-                        "strict": True,
-                        "schema": schema,
-                    }
-                },
-            )
-        except Exception as exc:
-            last_error = exc
-            # Transient network/timeout failures: one more try with the same budget.
-            if attempt < 2:
-                continue
-            break
-
-        output_text = _response_output_text(response)
-        incomplete = getattr(response, "incomplete_details", None)
-        incomplete_reason = getattr(incomplete, "reason", None) if incomplete else None
-
+    for attempt in range(2):
+        response = await client.responses.create(
+            model=settings.openai_model,
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            max_output_tokens=max_tokens if attempt == 0 else max(max_tokens * 2, 900),
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        )
+        output_text = (response.output_text or "").strip()
         if not output_text:
             last_error = RuntimeError(
-                f"empty output status={response.status} incomplete={incomplete_reason}"
+                f"OpenAI returned empty output (status={response.status}, incomplete_details={response.incomplete_details})"
             )
-            if incomplete_reason == "max_output_tokens" and attempt < 2:
-                token_budget = max(token_budget * 2, 1400)
             continue
-
         try:
             result = json.loads(output_text)
         except json.JSONDecodeError as exc:
-            last_error = RuntimeError(
-                f"invalid JSON status={response.status} incomplete={incomplete_reason}: {exc}"
-            )
-            if incomplete_reason == "max_output_tokens" and attempt < 2:
-                token_budget = max(token_budget * 2, 1400)
+            last_error = exc
             continue
-
         if isinstance(result, dict):
             return result
         last_error = TypeError("OpenAI structured output is not a JSON object")
 
-    error_detail = f"{type(last_error).__name__}: {str(last_error)[:350]}" if last_error else "unknown"
-    raise RuntimeError(
-        f"OpenAI structured output failed ({schema_name}, {error_detail})"
-    ) from last_error
+    raise RuntimeError("OpenAI did not return valid structured output after retry") from last_error
 
 
 async def generate_selin_reply(
@@ -513,15 +429,13 @@ async def analyze_food_images(
         intro += f"\n\nКомментарий пользователя (считать важным источником): {comment}"
 
     content: list[dict[str, Any]] = [{"type": "input_text", "text": intro}]
-    # Keep the first photo high-detail for labels; extra album photos use auto
-    # so multi-image requests stop timing out on Bothost.
-    for index, (image_bytes, mime_type) in enumerate(images[:8]):
+    for image_bytes, mime_type in images[:8]:
         b64 = base64.b64encode(image_bytes).decode("ascii")
         content.append(
             {
                 "type": "input_image",
                 "image_url": f"data:{mime_type};base64,{b64}",
-                "detail": "high" if index == 0 else "auto",
+                "detail": "high",
             }
         )
 
@@ -530,51 +444,7 @@ async def analyze_food_images(
         user_content=content,
         schema_name="food_image_analysis_v9",
         schema=FOOD_SCHEMA,
-        max_tokens=1200,
-        timeout=90.0 if len(images) > 1 else 70.0,
-    )
-
-
-async def suggest_mini_quest(*, context: dict[str, Any]) -> dict:
-    """Offer one bounded small errand instead of asking the player to invent a quest."""
-    schema = {
-        "type": "object", "additionalProperties": False,
-        "properties": {
-            "title": {"type": "string"},
-            "reason": {"type": "string"},
-            "difficulty": {"type": "string", "enum": ["easy", "normal"]},
-        },
-        "required": ["title", "reason", "difficulty"],
-    }
-    system = """Ты Селин. Придумай ровно одно маленькое бытовое дело для Проводника на сегодня (примерно 5–20 минут), необязательное и доступное без специальных условий. Это может быть уборка, уход за собой, маленькая прогулка, приготовление еды, разбор рабочего стола, отдых после сложного дня или что-то подобное. Избегай подсчёта калорий, веса, ограничений еды, наказаний и целей на физические нагрузки. Не повторяй однотипные шаги/воду/белок. Название <=60 символов. Короткое игровое обоснование 1 фразой, разговорным русским, без литературщины. Игрок сам отметит выполнение."""
-    return await _structured_response(
-        system=system,
-        user_content=f"Предложи одно новое посильное дело. Сейчас день истории {context.get('story_day')}; известно о пользователе: {context.get('memories', 'мало')}",
-        schema_name="daily_mini_quest_v22",
-        schema=schema, max_tokens=250,
-    )
-
-
-async def analyze_food_text(description: str) -> dict:
-    """Estimate a food/drink from text only; do not impersonate a label or photo."""
-    system = """
-Ты помогаешь записать еду или напиток в личном дневнике по ОДНОМУ ТЕКСТОВОМ описанию пользователя, без фото.
-Если пользователь сообщил КБЖУ на 100 г и съеденное количество, пересчитай его аккуратно.
-Если указана только еда/название кафе (например, «выпила какао из кофейни»), укажи диапазон оценки,
-confidence=low, nutrition_source=text_estimate. Не выдавай число за измеренное.
-У кафе сильно меняются молоко, сироп, объём, поэтому не придумывай точный рецепт.
-Если есть только описание без объёма, можно оставить калории null и попросить уточнение в note.
-Если пользователь передал конкретные цифры КБЖУ, nutrition_source=label, только если он прямо их указал;
-иначе text_estimate. Поля per_100g заполняй лишь по известным значениям. Не путай число на 100 г и на порцию.
-Категории: meal, snack, treat, drink; у напитков drink_kind=plain/caloric/energy/unknown.
-Не выдумывай, что видела изображение, и не делай выводов о здоровье или весе.
-""".strip()
-    return await _structured_response(
-        system=system,
-        user_content=f"Запиши по описанию (только одна порция): {description[:2000]}",
-        schema_name="food_text_analysis_v23",
-        schema=FOOD_TEXT_SCHEMA,
-        max_tokens=670,
+        max_tokens=750,
     )
 
 
@@ -603,51 +473,34 @@ async def analyze_activity_image(image_bytes: bytes, mime_type: str = "image/jpe
     )
 
 
-async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str, recent_history: str = "") -> dict:
+async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str) -> dict:
     system = """
-Ты придумываешь три варианта игрового челленджа на один день для личной фэнтези-RPG. Селин готовит Проводника к приключениям, но пишет обычным разговорным языком, без литературной прозы. Названия можно слегка стилизовать под подготовку авантюриста, но условие должно быть сразу понятно.
+Ты придумываешь три варианта игрового челленджа на один день для личной фэнтези-RPG. Селин тренирует Проводника как будущего авантюриста, но пишет обычным разговорным языком, без литературной прозы. Названия можно слегка стилизовать под подготовку к походу: «Марш-бросок», «Запасы в порядке», «Белковый паёк», но описание должно быть максимально понятным.
+Челлендж должен быть конкретным, измеримым существующими данными бота и добровольным. За провал нет штрафа — просто нет награды.
+Разрешённые code и смысл:
+- steps: шаги, target 5000/7000/9000/12000
+- water: отметки гидратации (вода, zero/почти некалорийный напиток), target 2/3/4
+- meals: полноценные приёмы пищи, target 2/3
+- workout: минуты одной/нескольких тренировок сегодня, target 10/20/30/45
+- food_logs: количество записанных через фото приёмов/продуктов, target 2/3/4
+- treat_limit: не больше target вкусняшек за день, target только 1 или 2
+- energy_limit: не больше target энергетиков, target только 1
+- protein_meals: количество полноценных приёмов пищи с примерно 20+ г белка, target 1/2/3
 
-Главная проблема, которую надо избегать: НЕ генерируй каждый день одну и ту же тройку «шаги + белок + вода». Используй историю последних дней и сознательно меняй механику. Если код встречался вчера, по возможности не используй его сегодня. Один и тот же код не должен появляться чаще двух раз за последние 7 дней, если есть другие разумные варианты.
-
-Три варианта должны быть из разных направлений:
-1) движение/тренировка ИЛИ игровая активность;
-2) питание/гидратация ИЛИ осознанность;
-3) взаимодействие с Тори/Воля/квесты ИЛИ другая механика, которой давно не было.
-Не обязательно давать пищевой челлендж каждый день. Не больше ОДНОГО варианта в тройке про белок/приёмы пищи.
-
-Челлендж конкретный, измеримый данными бота и добровольный. За провал нет штрафа.
-Разрешённые code и target:
-- steps: шаги, 5000/7000/9000/12000
-- water: отметки гидратации, 2/3/4
-- meals: полноценные приёмы пищи, 2/3
-- workout: минуты тренировок сегодня, 10/20/30/45
-- food_logs: количество записей еды через фото, 2/3/4
-- treat_limit: максимум вкусняшек за день, только 1/2
-- energy_limit: максимум энергетиков, только 1
-- protein_meals: полноценные приёмы с примерно 20+ г белка, 1/2/3
-- tori_bond: набрать за сегодняшний день столько единиц связи с Тори, 1/2/3
-- tori_interactions: сделать разные награждаемые взаимодействия во вкладке Тори, 1/2/3
-- willpower_actions: осознанно поймать импульс или выдержать паузу искушения, 1/2 раза
-- quests: закрыть пользовательский/AI-квест, 1/2
-
-Примеры разнообразия: «зайти к Тори два раза разными действиями», «закрыть один квест», «поймать один импульс до автоматического перекуса», «20 минут любой тренировки», «два нормальных приёма пищи», «день без второго энергетика». Это только примеры — не копируй их ежедневно.
-
-Не предлагай голодание, пропуск еды, минимальные калории, наказание упражнениями или «отработать еду».
+Не предлагай подсчёт минимальных калорий, голодание, пропуск еды, «отработать еду», наказание упражнениями или опасные ограничения.
+Сделай варианты разными: хотя бы один не про еду. Текст обычный, короткий, без литературщины.
 """.strip()
     prompt = f"""
 Состояние сегодня:
 шаги {context['steps']}, гидратация {context['water']}, полноценная еда {context['meals']}, перекусы {context['snacks']}, вкусняшки {context['treats_logged']}, энергетики {context['energy_drinks']}.
 Синхронизация {context['level']} уровня. Сегодня день истории {context['story_day']}.
-Ориентир по энергии: около {context.get('calorie_target_kcal', 1500)} ккал в день. Не делай точное попадание в калории челленджем.
+Ориентир по энергии: около {context.get('calorie_target_kcal', 1500)} ккал в день. Не делай из точного попадания в калории самостоятельный челлендж.
 Правила тренера: {coach_rules or 'нет отдельных правил'}
-Память о привычках/предпочтениях:
+Что уже известно о привычках/предпочтениях пользователя:
 {context.get('memories') or 'пока ничего устойчивого'}
-Фокус прошлого вечернего разбора: {context.get('previous_focus') or 'нет'}
+Фокус после предыдущего вечернего разбора: {context.get('previous_focus') or 'нет'}
 
-Последние челленджи (их надо учитывать ради разнообразия):
-{recent_history or 'истории пока нет'}
-
-Дай ровно три варианта. Выбери механику, которой в последнее время было меньше.
+Дай ровно три подходящих варианта. Если вчерашний фокус уместен, один из вариантов может продолжать его.
 """.strip()
     return await _structured_response(
         system=system,
@@ -673,7 +526,6 @@ async def generate_evening_nutrition_review(
 - сравни известную калорийность с дневным ориентиром. Если она выше — спокойно назови примерную разницу и покажи 1–3 конкретных места из сегодняшних записей, где можно было сократить без голода: соус, сыр, масло, жирный продукт, сладкий напиток, вкусняшка или чрезмерная порция;
 - не предлагай пропускать следующий приём пищи, голодать, «отрабатывать» еду тренировкой или компенсировать на следующий день;
 - если калорийность заметно ниже ориентира, не хвали это как победу и не советуй урезать ещё сильнее; цель — устойчивый нормальный рацион;
-- если сегодня была тренировка, учитывай, что потребности в энергии, гидратации и восстановлении могут отличаться. Не вычитай якобы сожжённые ккал из еды и не назначай автоматическую новую норму; при голоде после тренировки предложи нормальную еду с белком и углеводами. 1500 ккал — не универсальная рекомендация для тренировочного дня; не делай медицинских выводов;
 - оцени структуру дня: были ли полноценные приёмы пищи, белок в основных приёмах, овощи/зелень, нормальные углеводы, много ли случайных перекусов/вкусняшек, не набежало ли слишком много жира;
 - правила тренера имеют приоритет над общими догадками;
 - предложи 1–3 очень конкретных улучшения на завтра;
@@ -694,7 +546,6 @@ async def generate_evening_nutrition_review(
 - известное КБЖУ: {context['nutrition_calories']} ккал; Б {context['nutrition_protein']} г; Ж {context['nutrition_fat']} г; У {context['nutrition_carbs']} г
 - калорийный ориентир: около {context.get('calorie_target_kcal', 1500)} ккал
 - разница по известным записям: {context.get('calorie_delta_kcal', 0):+d} ккал
-- тренировки сегодня: {context.get('workouts_today_count', 0)}; типы: {context.get('workout_types_today', 'нет')}; минут самостоятельных занятий: {context.get('workout_manual_minutes_today', 0)}
 - записей еды с КБЖУ: {context['nutrition_count']} из {context.get('nutrition_entry_count', context['nutrition_count'])} подробных записей
 - из них оценок в основном по фото: {context.get('nutrition_photo_estimate_count', 0)}; низкая уверенность: {context.get('nutrition_low_confidence_count', 0)}
 
@@ -755,7 +606,6 @@ async def generate_intraday_nutrition_advice(
 - про питьё говори как про гидратацию: вода, zero и почти некалорийные напитки подходят. Не требуй именно чистую воду;
 - если всё идёт нормально, можно дать короткое подтверждение курса и один конкретный ориентир на следующий приём;
 - правила тренера ниже имеют приоритет над общими эвристиками;
-- если сегодня была тренировка, учитывай восстановление, потребность в полноценной еде и питье. Не вычисляй «остаток калорий» с вычетом расхода тренировки, не предлагай компенсировать еду упражнениями и не применяй одинаково строгую оценку к дню отдыха и дню активности;
 - не ставь диагнозы и не назначай лечение.
 
 Поле text — только сама реплика Селин. Не повторяй полный дневной отчёт и не перечисляй все цифры без необходимости.
@@ -774,7 +624,6 @@ async def generate_intraday_nutrition_advice(
 - известное КБЖУ: {context['nutrition_calories']} ккал; Б {context['nutrition_protein']} г; Ж {context['nutrition_fat']} г; У {context['nutrition_carbs']} г
 - дневной ориентир: около {context.get('calorie_target_kcal', 1500)} ккал
 - по известным записям до/сверх ориентира: {context.get('calorie_delta_kcal', 0):+d} ккал
-- тренировки за сегодня: {context.get('workouts_today_count', 0)}; {context.get('workout_types_today', 'нет записей')}; минут самостоятельных: {context.get('workout_manual_minutes_today', 0)}
 - записей с КБЖУ: {context['nutrition_count']} из {context.get('nutrition_entry_count', context['nutrition_count'])}
 - оценок в основном по фото: {context.get('nutrition_photo_estimate_count', 0)}; низкая уверенность: {context.get('nutrition_low_confidence_count', 0)}
 
@@ -793,3 +642,54 @@ async def generate_intraday_nutrition_advice(
         schema=INTRADAY_NUTRITION_SCHEMA,
         max_tokens=420,
     )
+
+
+RECIPE_ESTIMATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "category": {"type": "string", "enum": ["meal", "snack", "treat", "drink"]},
+        "ingredients": {"type": "string"},
+        "portion_grams": {"type": ["number", "null"]},
+        "calories_kcal": {"type": ["number", "null"]},
+        "protein_g": {"type": ["number", "null"]},
+        "fat_g": {"type": ["number", "null"]},
+        "carbs_g": {"type": ["number", "null"]},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "note": {"type": "string"},
+    },
+    "required": ["name", "category", "ingredients", "portion_grams", "calories_kcal",
+                 "protein_g", "fat_g", "carbs_g", "confidence", "note"],
+    "additionalProperties": False,
+}
+
+
+async def estimate_saved_recipe(
+    description: str,
+    *,
+    servings: int = 1,
+    original: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Estimate a serving or adjust a saved recipe; does not write to the DB."""
+    if not 1 <= servings <= 100:
+        raise ValueError("Некорректное число порций")
+    system = """
+Ты помощник по ведению личной книги блюд. Возвращай ТОЛЬКО данные об ОДНОЙ порции.
+Используй известные пользователю граммы, этикетки и их цифры в первую очередь.
+Если это заготовка из нескольких порций: посчитай сумму продуктов и раздели на
+число порций, указанное в запросе. Сухие крупы/макароны и готовые не путай.
+Если меняют сохранённый рецепт: исходные граммы и КБЖУ используй как ориентир,
+измени только то, что явно указано. Неизвестные веса и бренды не выдумывай как точные.
+Если информации мало, дай приблизительную оценку с confidence=low или null там,
+где оценить нельзя. В note кратко поясни погрешность. Укажи понятный список
+ингредиентов, включая изменения, и короткое название рецепта.
+Не давай оценочных суждений о «хороших»/«плохих» продуктах.
+""".strip()
+    prompt = (
+        f"Порций в партии: {servings}.\nОписание пользователя: {description[:4500]}\n"
+        + (f"Исходный рецепт (одна порция): {json.dumps(original, ensure_ascii=False)}\n" if original else "")
+        + "Считай итог ТОЛЬКО на одну готовую порцию; не на всю кастрюлю."
+    )
+    return await _structured_response(system=system, user_content=prompt,
+                                      schema_name="saved_recipe_estimate_v20",
+                                      schema=RECIPE_ESTIMATE_SCHEMA, max_tokens=420)

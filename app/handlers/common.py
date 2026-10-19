@@ -12,7 +12,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionLocal
 from app.keyboards import back_menu, drink_menu, food_menu, main_menu, quest_menu, temptation_menu, wardrobe_menu
-from app.models import CustomQuest, Notification, PendingTemptation
+from app.models import CustomQuest, Notification, PendingTemptation, SavedRecipe
 from app.services.achievements import achievement_catalog, achievement_catalog_text, achievement_messages, check_achievements
 from app.services.ai_engine import ai_enabled
 from app.services.ai_features import daily_treat_count, get_calorie_target
@@ -109,8 +109,6 @@ async def today(message: Message) -> None:
         initialize_week1_v2(progress, profile, today_date)
         advance_week1_if_due(progress, today_date)
         workout_week = await weekly_workout_summary(session, profile.id, today_date)
-        from app.services.ai_features import build_ai_context
-        training_context = await build_ai_context(session, profile)
         nutrition = await daily_nutrition_totals(session, profile.id, today_date)
         treats = await daily_treat_count(session, profile.id, today_date)
         calorie_target = await get_calorie_target(session, profile.id)
@@ -169,8 +167,7 @@ async def today(message: Message) -> None:
             f"🍲 Еда: {stat.meals} · 🍎 Перекусы: {stat.snacks} · 🍰 Вкусняшки: {treats}\n"
             f"🥤 Напитки: {stat.drinks} · 💧 Гидратация: {stat.water} · ⚡ Энергетики: {stat.energy_drinks}\n"
             f"🚶 Шаги: {stat.steps:,}{nutrition_line}\n"
-            f"🏋️ Сегодня: {training_context['workouts_today_count']} трен. · {training_context['workout_types_today']}\n"
-            f"🏋️ За неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
+            f"🏋️ Тренировки за неделю: {workout_week['count']} · {workout_week['minutes']} мин\n\n"
             f"Ателье: {profile.coins} монет · {profile.atelier_dust} Пыли · {profile.trial_chests} сундуков"
         ).replace(",", " "),
     )
@@ -180,17 +177,34 @@ async def today(message: Message) -> None:
 async def achievements(message: Message) -> None:
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
-        unlocked = await check_achievements(session, profile)
         rows = await achievement_catalog(session, profile)
         await session.commit()
     await message.answer(achievement_catalog_text(rows))
-    for item in achievement_messages(unlocked):
-        await message.answer(item)
+
+
+async def food_menu_with_favorites(telegram_id: int) -> InlineKeyboardMarkup:
+    """Put up to three habitual meals in front, without a photo or extra taps."""
+    menu = food_menu()
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, telegram_id, None)
+        favorites = (await session.scalars(select(SavedRecipe).where(
+            SavedRecipe.user_id == profile.id,
+        ).order_by(SavedRecipe.is_favorite.desc(), SavedRecipe.uses.desc(),
+                   SavedRecipe.id.desc()).limit(3))).all()
+    if favorites:
+        menu.inline_keyboard[:0] = [
+            [InlineKeyboardButton(
+                text=f"⚡ {recipe.name[:38]} · {round(recipe.calories_kcal) if recipe.calories_kcal is not None else '?'} ккал",
+                callback_data=f"recipe:use:{recipe.id}:100",
+            )] for recipe in favorites
+        ]
+    return menu
 
 
 @router.message(F.text == "🍽 Еда")
 async def food(message: Message) -> None:
-    await send_background(message, "food_nook", "Что отмечаем?", reply_markup=food_menu())
+    await send_background(message, "food_nook", "Что отмечаем?\nБыстрые блюда записываются одним нажатием.",
+                          reply_markup=await food_menu_with_favorites(message.from_user.id))
 
 
 @router.callback_query(F.data == "food:meal")
@@ -281,7 +295,8 @@ async def treat(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "food:menu")
 async def food_menu_back(callback: CallbackQuery) -> None:
-    await replace_text_view(callback.message, "Что отмечаем?", reply_markup=food_menu())
+    await replace_text_view(callback.message, "Что отмечаем?\nБыстрые блюда записываются одним нажатием.",
+                            reply_markup=await food_menu_with_favorites(callback.from_user.id))
     await callback.answer()
 
 
@@ -367,7 +382,6 @@ async def temptation_impulse(callback: CallbackQuery) -> None:
     if rewarded:
         text += "\n+10 XP · +1 Воля"
     await send_reaction(callback.message, "selin", "smirk", text)
-    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()
@@ -402,7 +416,6 @@ async def temptation_pause(callback: CallbackQuery) -> None:
         await session.commit()
     extra = "\n+5 XP за паузу." if eligible else ""
     await send_reaction(callback.message, "selin", "neutral", "Селин: — Хорошо. Пятнадцать минут. Потом решишь ещё раз." + extra)
-    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     await callback.answer()
 
 
@@ -444,7 +457,6 @@ async def temptation_no_longer(callback: CallbackQuery) -> None:
     if pending.reward_eligible:
         text += "\n+10 XP · +1 Воля · +2 связь с Тори"
     await send_reaction(callback.message, "selin", "soft_smile", text)
-    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()
@@ -510,57 +522,6 @@ async def quests(message: Message) -> None:
 async def quest_menu_back(callback: CallbackQuery) -> None:
     await replace_text_view(callback.message, "Пользовательские квесты:", reply_markup=quest_menu())
     await callback.answer()
-
-
-@router.callback_query(F.data == "quest:ai_suggest")
-async def suggest_quest_from_selin(callback: CallbackQuery) -> None:
-    from app.services.ai_engine import suggest_mini_quest
-    from app.services.ai_features import (
-        build_ai_context, can_offer_ai_quest, create_ai_quest_offer, reserve_ai_call,
-    )
-    from app.keyboards import ai_quest_offer_menu
-    if not ai_enabled():
-        await callback.answer("Селин пока не может придумывать задания без AI.", show_alert=True)
-        return
-    today = now_local().date()
-    async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        can_offer = await can_offer_ai_quest(session, profile.id, today)
-        allowed = can_offer and await reserve_ai_call(session, profile.id, "initiative")
-        context = await build_ai_context(session, profile) if allowed else {}
-        await session.commit()
-    if not can_offer:
-        await callback.answer("Сегодня Селин уже предлагала задание. Завтра можно попросить новое.", show_alert=True)
-        return
-    if not allowed:
-        await callback.answer("AI временно недоступен.", show_alert=True)
-        return
-    await callback.answer()
-    await replace_text_view(callback.message, "⏳ Селин придумывает небольшое дело на сегодня…")
-    try:
-        proposed = await suggest_mini_quest(context=context)
-    except Exception as exc:
-        print("[QUEST] mini quest error", repr(exc))
-        await replace_text_view(callback.message, "Не получилось придумать квест. Можно попробовать позже.", reply_markup=quest_menu())
-        return
-    async with SessionLocal() as session:
-        profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-        # Protect against repeated callbacks and another simultaneous offer.
-        if not await can_offer_ai_quest(session, profile.id, today):
-            await replace_text_view(callback.message, "На сегодня задание уже предложено.", reply_markup=quest_menu())
-            return
-        offer = await create_ai_quest_offer(
-            session, profile,
-            title=str(proposed.get("title") or "Маленькое полезное дело")[:120],
-            difficulty=str(proposed.get("difficulty") or "easy"),
-            reason=str(proposed.get("reason") or "")[:240],
-        )
-        await session.commit()
-    await replace_text_view(
-        callback.message,
-        f"📜 Предложение Селин: {offer.title}\n{offer.reason}\n\nНаграда: +{offer.reward_xp} XP · +{offer.reward_coins} монеты. Брать не обязательно.",
-        reply_markup=ai_quest_offer_menu(offer.id),
-    )
 
 
 @router.callback_query(F.data == "quest:new")
@@ -671,7 +632,6 @@ async def quest_done(callback: CallbackQuery) -> None:
         unlocked = await check_achievements(session, profile)
         await session.commit()
     await send_reaction(callback.message, "tori", "proud", custom_quest_done() + f"\n+{quest.reward_xp} XP · +{quest.reward_coins} монет")
-    await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
     for msg in achievement_messages(unlocked):
         await callback.message.answer(msg)
     await callback.answer()

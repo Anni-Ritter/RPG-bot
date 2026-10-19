@@ -5,11 +5,12 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Сегодня"), KeyboardButton(text="🚶 Шаги")],
-            [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="🏋️ Тренировка")],
+            [KeyboardButton(text="🍽 Еда"), KeyboardButton(text="📖 Книга припасов")],
+            [KeyboardButton(text="🏋️ Тренировка"), KeyboardButton(text="🎯 Челлендж")],
             [KeyboardButton(text="📜 Квесты"), KeyboardButton(text="🎁 Гардероб")],
             [KeyboardButton(text="📖 История"), KeyboardButton(text="💬 Селин")],
             [KeyboardButton(text="🦊 Тори"), KeyboardButton(text="📷 Анализ фото")],
-            [KeyboardButton(text="🎯 Челлендж"), KeyboardButton(text="🏆 Ачивки")],
+            [KeyboardButton(text="🏆 Ачивки")],
         ],
         resize_keyboard=True,
     )
@@ -59,6 +60,8 @@ def food_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🍰 Вкусняшка", callback_data="food:treat"),
                 InlineKeyboardButton(text="🥤 Напиток / гидратация", callback_data="food:drink"),
             ],
+            [InlineKeyboardButton(text="📖 Книга припасов", callback_data="recipe:menu")],
+            [InlineKeyboardButton(text="🔁 Повторить последнюю запись", callback_data="recipe:last")],
             [InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation")],
         ]
     )
@@ -135,10 +138,7 @@ def wardrobe_menu(chests: int) -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(text=f"✨ Открыть сундук ({chests})", callback_data="chest:open")])
     buttons.extend(
         [
-            [InlineKeyboardButton(text="🖼 Листать свитки", callback_data="wardrobe:list")],
-            [InlineKeyboardButton(text="📚 Каталог и прогресс", callback_data="wardrobe:catalog:a:0")],
-            [InlineKeyboardButton(text="🎨 Галерея артов", callback_data="wc:g:0"),
-             InlineKeyboardButton(text="💜 Избранное", callback_data="wc:v:0")],
+            [InlineKeyboardButton(text="📚 Мои свитки", callback_data="wardrobe:list")],
             [InlineKeyboardButton(text="🪙 Ателье", callback_data="shop:atelier")],
             [InlineKeyboardButton(text="✨ Пыль ателье", callback_data="shop:dust")],
         ]
@@ -200,8 +200,7 @@ def dust_shop_menu(dust: int) -> InlineKeyboardMarkup:
 def quest_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🎲 Маленькое дело от Селин", callback_data="quest:ai_suggest")],
-            [InlineKeyboardButton(text="➕ Создать свой (необязательно)", callback_data="quest:new")],
+            [InlineKeyboardButton(text="➕ Новый квест", callback_data="quest:new")],
             [InlineKeyboardButton(text="📋 Активные", callback_data="quest:list")],
         ]
     )
@@ -210,13 +209,12 @@ def quest_menu() -> InlineKeyboardMarkup:
 def story_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup | None:
     if not choices:
         return None
-    rows = []
-    for choice in choices:
-        locked = bool(choice.get("locked"))
-        label = ("🔒 " if locked else "") + str(choice["label"])
-        prefix = "storylocked" if locked else "storychoice"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{day}:{choice['id']}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=choice["label"], callback_data=f"storychoice:{day}:{choice['id']}")]
+            for choice in choices
+        ]
+    )
 
 
 def story_v2_choices_menu(day: int, choices: list[dict]) -> InlineKeyboardMarkup | None:

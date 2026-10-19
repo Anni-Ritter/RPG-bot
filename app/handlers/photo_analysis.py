@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 import asyncio
 from io import BytesIO
 from datetime import datetime
@@ -11,7 +9,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, User
+from aiogram.types import CallbackQuery, Message, User, InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
 from app.db import SessionLocal
@@ -23,12 +21,11 @@ from app.keyboards import (
     food_photo_prepare_menu,
     photo_kind_menu,
 )
-from app.models import AIImageAnalysis
+from app.models import AIImageAnalysis, FoodNutritionLog, SavedRecipe
 from app.services.ai_engine import ai_enabled, analyze_activity_image, analyze_food_images
 from app.services.ai_features import reserve_ai_call
 from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.assets import send_reaction
-from app.services.achievements import check_achievements, achievement_messages
 from app.services.nutrition import (
     can_scale_by_grams,
     normalize_food_result,
@@ -44,8 +41,8 @@ from app.services.self_workouts import (
 from app.services.steps import evaluate_steps
 from app.services.hydration import record_hydration
 from app.services.intraday_coach import create_intraday_food_feedback
-
-logger = logging.getLogger("selin_tori.photo_ai")
+from sqlalchemy import select
+from difflib import SequenceMatcher
 
 router = Router()
 TZ = ZoneInfo(settings.timezone)
@@ -137,7 +134,7 @@ async def _delete_flow_message(message: Message, state: FSMContext) -> None:
             pass
 
 
-async def _finish_result_message(message: Message, text: str) -> None:
+async def _finish_result_message(message: Message, text: str, *, reply_markup=None) -> None:
     """Close inline buttons without creating another reaction message when possible."""
     suffix = f"\n\n✅ {text}"
     try:
@@ -145,17 +142,17 @@ async def _finish_result_message(message: Message, text: str) -> None:
             base = message.caption or ""
             combined = base + suffix
             if len(combined) <= 1000:
-                await message.edit_caption(caption=combined, reply_markup=None)
+                await message.edit_caption(caption=combined, reply_markup=reply_markup)
                 return
         elif message.text:
             combined = message.text + suffix
             if len(combined) <= 3900:
-                await message.edit_text(combined, reply_markup=None)
+                await message.edit_text(combined, reply_markup=reply_markup)
                 return
-        await message.edit_reply_markup(reply_markup=None)
+        await message.edit_reply_markup(reply_markup=reply_markup)
     except Exception:
         pass
-    await message.answer(text)
+    await message.answer(text, reply_markup=reply_markup)
 
 
 def _merge_comment(existing: str, captions: list[str]) -> str:
@@ -256,7 +253,6 @@ def _nutrition_source_label(value: str) -> str:
         "label": "по этикетке / КБЖУ",
         "mixed": "по этикетке + фото блюда",
         "photo_estimate": "примерная оценка по фото",
-        "text_estimate": "примерная оценка по описанию",
         "none": "не определён",
     }.get(value, "не определён")
 
@@ -284,11 +280,11 @@ def _food_result_text(result: dict) -> str:
     }
     lines = [
         f"Похоже на: {result.get('summary', 'не получилось уверенно определить')}",
-        f"{'По описанию' if result.get('image_count') == 0 else 'Что вижу'}: {items}",
+        f"Что вижу: {items}",
         f"Категория: {category_labels.get(result.get('category'), 'неясно')}",
     ]
     if result.get("user_comment"):
-        lines.append(f"Учла описание: {result['user_comment']}")
+        lines.append(f"Учла комментарий: {result['user_comment']}")
     lines.extend([
         "",
         f"Источник КБЖУ: {_nutrition_source_label(str(result.get('nutrition_source') or 'none'))}",
@@ -299,7 +295,7 @@ def _food_result_text(result: dict) -> str:
     fat = result.get("fat_g")
     carbs = result.get("carbs_g")
     if any(v is not None for v in (kcal, protein, fat, carbs)):
-        prefix = "≈ " if result.get("nutrition_source") in {"photo_estimate", "text_estimate"} else ""
+        prefix = "≈ " if result.get("nutrition_source") == "photo_estimate" else ""
         lines.append(f"🔥 {prefix}{_fmt_number(kcal, ' ккал')}")
         lines.append(
             f"Б {_fmt_number(protein, ' г')} · Ж {_fmt_number(fat, ' г')} · У {_fmt_number(carbs, ' г')}"
@@ -309,7 +305,7 @@ def _food_result_text(result: dict) -> str:
             lines.append(f"Вес расчёта: {_fmt_number(reference_grams, ' г')}")
         low = result.get("calories_min_kcal")
         high = result.get("calories_max_kcal")
-        if low is not None and high is not None and result.get("nutrition_source") in {"photo_estimate", "text_estimate"}:
+        if low is not None and high is not None and result.get("nutrition_source") == "photo_estimate":
             lines.append(f"Примерный диапазон: {low}–{high} ккал")
 
         p100 = result.get("per_100g_protein_g")
@@ -324,7 +320,7 @@ def _food_result_text(result: dict) -> str:
                 f"{_fmt_number(k100, ' ккал')} · Б {_fmt_number(p100)} · Ж {_fmt_number(f100)} · У {_fmt_number(c100)}"
             )
     else:
-        lines.append("КБЖУ по этим данным определить не получилось.")
+        lines.append("КБЖУ по этому изображению определить не получилось.")
 
     if result.get("basis"):
         lines.append(f"Расчёт: {result['basis']}")
@@ -352,6 +348,30 @@ async def _reserve_vision_call(user: User, message: Message) -> bool:
     return allowed
 
 
+async def _save_recipe_button(user_id: int, analysis_id: int) -> InlineKeyboardMarkup | None:
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, user_id, None)
+        log = await session.scalar(select(FoodNutritionLog).where(
+            FoodNutritionLog.user_id == profile.id, FoodNutritionLog.analysis_id == analysis_id
+        ).order_by(FoodNutritionLog.id.desc()).limit(1))
+    if not log:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📖 Сохранить блюдо в книгу", callback_data=f"recipe:save:{log.id}")
+    ]])
+
+
+async def _matching_recipe(user_id: int, summary: str) -> SavedRecipe | None:
+    if not summary:
+        return None
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, user_id, None)
+        recipes = (await session.scalars(select(SavedRecipe).where(
+            SavedRecipe.user_id == profile.id
+        ).order_by(SavedRecipe.uses.desc()).limit(60))).all()
+        return next((r for r in recipes if SequenceMatcher(None, r.name.lower(), summary.lower()).ratio() >= 0.79), None)
+
+
 async def _analyze_from_state(message: Message, user: User, state: FSMContext, *, kind: str) -> None:
     data = await state.get_data()
     file_ids = list(data.get("photo_file_ids") or [])
@@ -372,54 +392,24 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
         state,
         "Смотрю изображение…" if count == 1 else f"Смотрю изображения: {count} шт.…",
     )
-    stage = "Telegram: получение изображений"
-    logger.info("[PHOTO_AI] start kind=%s count=%d", kind, count)
     try:
         images: list[tuple[bytes, str]] = []
         for index, file_id in enumerate(file_ids[:count]):
             mime = mime_types[index] if index < len(mime_types) else "image/jpeg"
             images.append((await _download_telegram_photo(message.bot, file_id), mime))
-        logger.info("[PHOTO_AI] downloaded count=%d", len(images))
 
-        stage = "OpenAI: анализ и структурированный ответ"
-        logger.info("[PHOTO_AI] requesting model kind=%s", kind)
         if kind == "food":
             comment = str(data.get("food_comment") or "").strip()
             result = normalize_food_result(await analyze_food_images(images, user_comment=comment))
             result["user_comment"] = comment
         else:
             result = await analyze_activity_image(images[0][0], images[0][1])
-        logger.info("[PHOTO_AI] received result kind=%s", kind)
     except Exception as exc:
-        # Log the stage and HTTP status without logging user photos, captions,
-        # Telegram file identifiers or API secrets.
-        status = getattr(exc, "status_code", None)
-        error_type = type(exc).__name__
-        reason = str(exc)[:220].replace("\n", " ")
-        logger.exception(
-            "[PHOTO_AI] failed stage=%s error=%s http_status=%s detail=%s",
-            stage, error_type, status, reason,
-        )
-        print(f"[PHOTO_AI] failed at {stage}: {error_type}, HTTP={status}, detail={reason}", flush=True)
-
-        lowered = reason.lower()
-        if "timeout" in lowered or "timed out" in lowered:
-            hint = "AI слишком долго обрабатывал фото. Попробуй 1–2 чётких кадра вместо большого альбома."
-        elif "max_output_tokens" in lowered or "empty output" in lowered or "invalid json" in lowered:
-            hint = "AI оборвал ответ посреди расчёта. Повтори ещё раз — обычно со второй попытки проходит."
-        elif "api_key" in lowered or "authentication" in lowered or "401" in lowered:
-            hint = "Похоже, на Bothost проблема с OPENAI_API_KEY."
-        else:
-            hint = "Можно попробовать ещё раз или отметить вручную."
-
+        print("AI image analysis error:", repr(exc))
         await _edit_flow_message(
             message,
             state,
-            "Не получилось распознать изображение.\n"
-            f"Этап: {stage}\n"
-            f"Ошибка: {error_type}\n"
-            f"{hint}\n"
-            "В логах Bothost ищи строку [PHOTO_AI].",
+            "Не получилось распознать изображение. Попробуй ещё раз позже или отметь вручную.",
         )
         await state.clear()
         return
@@ -452,12 +442,19 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
                 reply_markup=food_category_menu(analysis_id),
             )
         else:
+            markup = food_analysis_menu(analysis_id, can_enter_grams=can_scale_by_grams(result))
+            match = await _matching_recipe(user.id, str(result.get("summary") or ""))
+            if match:
+                markup.inline_keyboard.insert(0, [InlineKeyboardButton(
+                    text=f"📖 Это мой рецепт «{match.name[:32]}»",
+                    callback_data=f"recipe:open:{match.id}",
+                )])
             await send_reaction(
                 message,
                 "tori",
                 "curious",
                 _food_result_text(result),
-                reply_markup=food_analysis_menu(analysis_id, can_enter_grams=can_scale_by_grams(result)),
+                reply_markup=markup,
             )
     else:
         pieces = []
@@ -778,7 +775,7 @@ async def legacy_accept_food_analysis(callback: CallbackQuery, state: FSMContext
     await state.clear()
     await callback.answer()
     if text:
-        await send_reaction(callback.message, "selin", "smirk", text)
+        await send_reaction(callback.message, "selin", "smirk", text, reply_markup=await _save_recipe_button(callback.from_user.id, analysis_id))
 
 
 @router.callback_query(F.data.startswith("photoai:foodcategory:"))
@@ -987,14 +984,8 @@ async def accept_food_portion(callback: CallbackQuery, state: FSMContext) -> Non
     text = await _record_food_choice(callback, analysis_id=analysis_id, fraction=fraction, portion_label=label)
     await callback.answer()
     if text:
-        await _finish_result_message(callback.message, text)
+        await _finish_result_message(callback.message, text, reply_markup=await _save_recipe_button(callback.from_user.id, analysis_id))
         await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
-        async with SessionLocal() as session:
-            profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
-            achievements = await check_achievements(session, profile)
-            await session.commit()
-        for item in achievement_messages(achievements):
-            await callback.message.answer(item)
         advice = await create_intraday_food_feedback(
             callback.from_user.id,
             callback.from_user.full_name,
@@ -1036,14 +1027,8 @@ async def accept_food_grams(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     if text:
-        await send_reaction(message, "selin", "smirk", text)
+        await send_reaction(message, "selin", "smirk", text, reply_markup=await _save_recipe_button(message.from_user.id, int(analysis_id)))
         await check_and_notify_challenges(message, message.from_user.id, message.from_user.full_name)
-        async with SessionLocal() as session:
-            profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
-            achievements = await check_achievements(session, profile)
-            await session.commit()
-        for item in achievement_messages(achievements):
-            await message.answer(item)
         advice = await create_intraday_food_feedback(
             message.from_user.id,
             message.from_user.full_name,
@@ -1131,7 +1116,7 @@ async def accept_activity_analysis(callback: CallbackQuery) -> None:
     text = "Записала показатели с изображения."
     if reward_lines:
         text += "\n" + "\n".join(reward_lines)
-    await _finish_result_message(callback.message, text)
+    await _finish_result_message(callback.message, text, reply_markup=await _save_recipe_button(callback.from_user.id, analysis_id))
     await check_and_notify_challenges(callback.message, callback.from_user.id, callback.from_user.full_name)
 
 

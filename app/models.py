@@ -364,3 +364,38 @@ class EveningNutritionReview(Base):
     tomorrow_focus: Mapped[str] = mapped_column(String(320), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
+
+class SavedRecipe(Base):
+    """User-owned one-serving recipe. Original nutrition confidence is preserved."""
+    __tablename__ = "saved_recipes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(240))
+    category: Mapped[str] = mapped_column(String(20), default="meal")
+    ingredients: Mapped[str] = mapped_column(Text, default="")
+    nutrition_source: Mapped[str] = mapped_column(String(30), default="none")
+    confidence: Mapped[str] = mapped_column(String(20), default="low")
+    portion_grams: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calories_kcal: Mapped[float | None] = mapped_column(Float, nullable=True)
+    protein_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fat_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    carbs_g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_log_id: Mapped[int | None] = mapped_column(ForeignKey("food_nutrition_logs.id", ondelete="SET NULL"), nullable=True)
+    uses: Mapped[int] = mapped_column(Integer, default=0)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RecipeBatch(Base):
+    """An optional stash of already-cooked portions for a saved recipe."""
+    __tablename__ = "recipe_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("saved_recipes.id", ondelete="CASCADE"), index=True)
+    total_portions: Mapped[float] = mapped_column(Float)
+    remaining_portions: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
