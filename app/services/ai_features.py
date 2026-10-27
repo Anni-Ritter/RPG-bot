@@ -436,3 +436,29 @@ async def build_ai_context(session, profile):
     result['memories'] = (str(result.get('memories') or '') + '\n' + items).strip()
     return result
 # SELIN_WANDER_SHOP_20261027_END
+
+# SELIN_ACTIVITY_BREAK_20261027_BEGIN
+# Keep both living-rhythm and wander-shop context enrichments from existing code.
+_activity_break_previous_context = build_ai_context
+
+async def build_ai_context(session, profile):
+    context = await _activity_break_previous_context(session, profile)
+    from app.services.activity_breaks import get_break, is_in_effect, now_local, reason_label
+    row = await get_break(session, profile.id)
+    if not is_in_effect(row, now_local().date()):
+        return context
+    reminder = (
+        'ВРЕМЕННОЕ ОГРАНИЧЕНИЕ НАГРУЗОК ' + reason_label(row.reason) + '. '
+        'До явно подтвержденного возвращения НЕ предлагать тренировки, спорт, '
+        'нагрузочные испытания или обязательные нормы шагов. '
+        'Не предлагать компенсировать еду движением. '
+        'Можно поддерживать восстановление и обычное полноценное питание, '
+        'без медицинских выводов. День повторного вопроса: ' + row.check_on.isoformat() + '. '
+        'Прошедшая дата сама по себе не означает разрешения тренироваться.'
+    )
+    context = dict(context)
+    context['memories'] = (str(context.get('memories') or '') + '\n- ' + reminder).strip()
+    context['coach_rules'] = (str(context.get('coach_rules') or '') + '\n' + reminder).strip()
+    context['activity_break_active'] = True
+    return context
+# SELIN_ACTIVITY_BREAK_20261027_END

@@ -495,3 +495,18 @@ async def send_due(bot):
     await suppress_nonessential_autonomy()
     return await _living_rhythm_original_send_due(bot)
 # SELIN_LIVING_RHYTHM_20261027_END
+
+# SELIN_ACTIVITY_BREAK_20261027_BEGIN
+# Outer wrapper preserves the installed Living Rhythm suppression policy.
+_activity_break_previous_send_due = send_due
+
+async def send_due(bot):
+    from app.services.activity_breaks import (
+        now_local, send_due_checkins, suppress_due_sport_notifications,
+    )
+    now = now_local()
+    # Already queued sport reminders must be suppressed *before* dispatch.
+    await suppress_due_sport_notifications(now)
+    await send_due_checkins(bot, now)
+    return await _activity_break_previous_send_due(bot)
+# SELIN_ACTIVITY_BREAK_20261027_END

@@ -512,3 +512,15 @@ async def challenge_dashboard_line(
     if state["completed"]:
         return f"🎯 Челленджи: закрыто {len(state['completed'])} · можно взять ещё {len(available_indices(plan))}"
     return "🎯 Челленджи: выбери один, два или все три"
+
+# SELIN_ACTIVITY_BREAK_20261027_BEGIN
+# Respect paused activity when creating or retrieving a daily challenge plan.
+_activity_break_previous_ensure_plan = ensure_plan
+
+async def ensure_plan(session, profile, day=None):
+    plan = await _activity_break_previous_ensure_plan(session, profile, day)
+    from app.services.activity_breaks import adapt_challenge_plan, is_paused, now_local
+    if await is_paused(session, profile.id, day or now_local().date()):
+        adapt_challenge_plan(plan)
+    return plan
+# SELIN_ACTIVITY_BREAK_20261027_END

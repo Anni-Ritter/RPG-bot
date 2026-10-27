@@ -20,6 +20,13 @@ from app.services import wandering_shop as _wandering_shop_model_registry
 from app.handlers import wandering_shop as wandering_shop_handlers
 # SELIN_WANDER_SHOP_20261027_END
 
+# SELIN_ACTIVITY_BREAK_20261027_BEGIN
+# Register the ORM model before init_db() creates SQL tables.
+from app.handlers import activity_breaks as activity_break_handlers
+from app.handlers.activity_breaks import ActivityBreakMiddleware
+from app.services import activity_breaks as _activity_break_model_registry
+# SELIN_ACTIVITY_BREAK_20261027_END
+
 async def main() -> None:
     await init_db()
 
@@ -29,6 +36,9 @@ async def main() -> None:
 
     bot = Bot(settings.bot_token)
     dp = Dispatcher()
+    # Run before the active chat FSM routes: even an ordinary message can set a pause.
+    dp.message.outer_middleware(ActivityBreakMiddleware())
+    dp.include_router(activity_break_handlers.router)
     dp.include_router(common.router)
     dp.include_router(coaching.router)
     dp.include_router(nutrition_history.router)
