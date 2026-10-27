@@ -162,6 +162,7 @@ CHALLENGE_SCHEMA = {
                         "enum": [
                             "steps", "water", "meals", "workout", "food_logs",
                             "treat_limit", "energy_limit", "protein_meals",
+                            "tori_bond", "tori_interactions", "willpower_actions", "quests",
                         ],
                     },
                     "title": {"type": "string"},
@@ -327,13 +328,24 @@ async def _structured_response(*, system: str, user_content: Any, schema_name: s
         try:
             result = json.loads(output_text)
         except json.JSONDecodeError as exc:
-            last_error = exc
+            last_error = RuntimeError(
+                f"OpenAI returned non-JSON output ({exc.msg}; "
+                f"status={response.status}, incomplete_details={response.incomplete_details})"
+            )
             continue
         if isinstance(result, dict):
             return result
-        last_error = TypeError("OpenAI structured output is not a JSON object")
+        last_error = TypeError(
+            f"OpenAI structured output was not a JSON object "
+            f"(status={response.status}, incomplete_details={response.incomplete_details})"
+        )
 
-    raise RuntimeError("OpenAI did not return valid structured output after retry") from last_error
+    # Include the last failure cause in the server log without printing prompts,
+    # photos or the user's private food diary.
+    reason = str(last_error) if last_error else "no usable output"
+    raise RuntimeError(
+        f"OpenAI structured output failed for {schema_name} after retry: {reason}"
+    ) from last_error
 
 
 async def generate_selin_reply(
@@ -473,7 +485,9 @@ async def analyze_food_images(
         user_content=content,
         schema_name="food_image_analysis_v9",
         schema=FOOD_SCHEMA,
-        max_tokens=750,
+        # Vision plus reasoning can consume the original 750-token budget
+        # before the full JSON schema has been emitted.
+        max_tokens=1400,
     )
 
 
@@ -498,11 +512,13 @@ async def analyze_activity_image(image_bytes: bytes, mime_type: str = "image/jpe
         user_content=content,
         schema_name="activity_image_analysis",
         schema=ACTIVITY_SCHEMA,
-        max_tokens=300,
+        max_tokens=850,
     )
 
 
-async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str) -> dict:
+async def generate_daily_challenges(
+    *, context: dict[str, Any], coach_rules: str, recent_history: str = ""
+) -> dict:
     system = """
 Ты придумываешь три варианта игрового челленджа на один день для личной фэнтези-RPG. Селин тренирует Проводника как будущего авантюриста, но пишет обычным разговорным языком, без литературной прозы. Названия можно слегка стилизовать под подготовку к походу: «Марш-бросок», «Запасы в порядке», «Белковый паёк», но описание должно быть максимально понятным.
 Челлендж должен быть конкретным, измеримым существующими данными бота и добровольным. За провал нет штрафа — просто нет награды.
@@ -515,6 +531,10 @@ async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str
 - treat_limit: не больше target вкусняшек за день, target только 1 или 2
 - energy_limit: не больше target энергетиков, target только 1
 - protein_meals: количество полноценных приёмов пищи с примерно 20+ г белка, target 1/2/3
+- tori_bond: прирост связи с Тори за день, target 1/2/3
+- tori_interactions: количество взаимодействий с Тори за день, target 1/2/3
+- willpower_actions: осознанные решения/замеченные импульсы (не обязательно отказ от сладкого), target 1/2
+- quests: число завершённых квестов за день, target 1/2
 
 Не предлагай подсчёт минимальных калорий, голодание, пропуск еды, «отработать еду», наказание упражнениями или опасные ограничения.
 Сделай варианты разными: хотя бы один не про еду. Текст обычный, короткий, без литературщины.
@@ -528,8 +548,11 @@ async def generate_daily_challenges(*, context: dict[str, Any], coach_rules: str
 Что уже известно о привычках/предпочтениях пользователя:
 {context.get('memories') or 'пока ничего устойчивого'}
 Фокус после предыдущего вечернего разбора: {context.get('previous_focus') or 'нет'}
+Испытания предыдущих семи дней (не повторяй без причины):
+{recent_history.strip() or 'истории пока нет'}
 
-Дай ровно три подходящих варианта. Если вчерашний фокус уместен, один из вариантов может продолжать его.
+Дай ровно три подходящих варианта. Старайся чередовать типы испытаний и формулировки.
+Если вчерашний фокус уместен, один из вариантов может продолжать его.
 """.strip()
     return await _structured_response(
         system=system,
