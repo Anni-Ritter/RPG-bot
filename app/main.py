@@ -28,6 +28,7 @@ from app.handlers import release_status as release_status_handlers
 # SELIN_ACTIVITY_BREAK_20261027_BEGIN
 # Register the ORM model before init_db() creates SQL tables.
 from app.handlers import activity_breaks as activity_break_handlers
+from app.handlers import food_corrections as food_corrections_handlers
 from app.handlers.activity_breaks import ActivityBreakMiddleware
 from app.services import activity_breaks as _activity_break_model_registry
 # SELIN_ACTIVITY_BREAK_20261027_END
@@ -40,11 +41,13 @@ async def main() -> None:
         await session.commit()
 
     bot = Bot(settings.bot_token)
-    log.info("SELIN_RELEASE=2026-10-27-live-chat-presence-v2; main=%s", __file__)
+    log.info("SELIN_RELEASE=2026-10-27-food-edit-v1; main=%s", __file__)
     dp = Dispatcher()
     # Run before the active chat FSM routes: even an ordinary message can set a pause.
     dp.message.outer_middleware(ActivityBreakMiddleware())
     dp.include_router(activity_break_handlers.router)
+    # Diary corrections must reach the router before free-chat or quick-input fallbacks.
+    dp.include_router(food_corrections_handlers.router)
     # Explicit commands before chat/FSM handlers, regardless of current conversation.
     dp.include_router(release_status_handlers.router)
     dp.include_router(wandering_shop_handlers.router)

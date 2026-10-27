@@ -15,7 +15,7 @@ from app.db import SessionLocal
 
 router = Router()
 logger = logging.getLogger(__name__)
-RELEASE = '2026-10-27-live-chat-presence-v2'
+RELEASE = '2026-10-27-food-edit-v1'
 
 
 @router.message(Command('version', 'botversion'))
@@ -24,7 +24,9 @@ async def version(message: Message) -> None:
         f'✅ Селин и Тори — {RELEASE}\n'
         'Лавка странствий: обработчик подключён.\n'
         'Разговор без кнопки завершения; /selin_status показывает реальные изменения.\n'
-        'Открой /shop, а если будет ошибка — /shopcheck.'
+        'Еда: /food_edit — исправить или удалить запись.\n'
+        'Пауза тренировок: /activity_status.\n'
+        'Магазин: /shop; диагностика: /shopcheck.'
     )
 
 

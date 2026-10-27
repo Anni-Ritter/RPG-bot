@@ -190,6 +190,10 @@ async def free_chat_message(
 ) -> None:
     user_text = (user_text_override if user_text_override is not None else (message.text or "")).strip()
     actor = actor_override or message.from_user
+    from app.handlers.food_corrections import intercept_chat_food_edit
+    if await intercept_chat_food_edit(message, actor, user_text):
+        await state.update_data(last_chat_activity_at=now_local().isoformat())
+        return
     # SELIN_LIVING_RHYTHM_20261027_BEGIN
     from app.handlers.living_rhythm import handle_chat_capture
     if await handle_chat_capture(message, actor, user_text):
@@ -390,6 +394,9 @@ async def _handle_initiative_message(
     notification_id: int,
 ) -> None:
     user_text = (message.text or "").strip()
+    from app.handlers.food_corrections import intercept_chat_food_edit
+    if await intercept_chat_food_edit(message, message.from_user, user_text):
+        return
     from app.handlers.living_rhythm import handle_chat_capture
     if await handle_chat_capture(message, message.from_user, user_text):
         return

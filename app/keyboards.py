@@ -66,6 +66,7 @@ def food_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation")],
             [InlineKeyboardButton(text="🌿 Живой ритм", callback_data="rhythm:settings")],
             [InlineKeyboardButton(text="🗓 Приёмы пищи", callback_data="rhythm:diary")],
+            [InlineKeyboardButton(text="📝 Исправить / удалить запись", callback_data="fed:list")],
         ]
     )
 

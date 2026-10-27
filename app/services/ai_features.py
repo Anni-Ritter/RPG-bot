@@ -312,21 +312,42 @@ async def set_calorie_target(session: AsyncSession, user_id: int, target_kcal: i
 
 
 async def daily_treat_count(session: AsyncSession, user_id: int, day: date) -> int:
+    """Count current edible treats, not orphan reward events from deleted logs.
+
+    Manual treat marks have no detailed FoodNutritionLog and stay in GameEvent;
+    temptation decisions are independent of food logs and remain untouched.
+    """
+    from app.models import FoodNutritionLog
+    from app.services.living_rhythm import RhythmMealItem
+    rows = list((await session.scalars(select(FoodNutritionLog).where(
+        FoodNutritionLog.user_id == user_id,
+        FoodNutritionLog.logged_on == day,
+        FoodNutritionLog.category == 'treat',
+    ))).all())
+    treat_count = 0
+    for row in rows:
+        grouped = await session.scalar(select(RhythmMealItem).where(
+            RhythmMealItem.food_log_id == row.id))
+        treat_count += max(1, round(float(grouped.portions or 1))) if grouped else 1
     start = datetime.combine(day, datetime.min.time(), tzinfo=TZ)
     end = datetime.combine(day, datetime.max.time(), tzinfo=TZ)
-    count = await session.scalar(
-        select(func.count(GameEvent.id)).where(
-            GameEvent.user_id == user_id,
-            GameEvent.event_type.in_([
-                "treat_logged",
-                "temptation_accepted",
-                "temptation_after_pause_accepted",
-            ]),
-            GameEvent.occurred_at >= start,
-            GameEvent.occurred_at <= end,
-        )
-    )
-    return int(count or 0)
+    events = list((await session.scalars(select(GameEvent).where(
+        GameEvent.user_id == user_id,
+        GameEvent.event_type.in_([
+            'treat_logged', 'temptation_accepted', 'temptation_after_pause_accepted',
+        ]),
+        GameEvent.occurred_at >= start,
+        GameEvent.occurred_at <= end,
+    ))).all())
+    reversed_events = list((await session.scalars(select(GameEvent).where(
+        GameEvent.user_id == user_id,
+        GameEvent.event_type == 'manual_food_undone',
+    ))).all())
+    undone = {int(ev.payload['reversed_event_id']) for ev in reversed_events
+              if (ev.payload or {}).get('reversed_event_id') is not None}
+    independent = sum(1 for event in events if event.id not in undone and (
+        event.event_type != 'treat_logged' or (event.payload or {}).get('source') == 'manual'))
+    return int(treat_count + independent)
 
 
 async def build_ai_context(session: AsyncSession, profile: UserProfile) -> dict:

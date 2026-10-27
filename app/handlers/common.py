@@ -216,6 +216,9 @@ async def meal(callback: CallbackQuery) -> None:
         rewarded = stat.meals <= 3
         if rewarded:
             await apply_reward(session, profile, event_type="meal_complete", xp=20, coins=3)
+        else:
+            # Keep a zero-reward event so excess quick marks can be undone later.
+            await apply_reward(session, profile, event_type="meal_manual_unrewarded")
         unlocked = await check_achievements(session, profile)
         await session.commit()
     suffix = "\n+20 XP · +3 монеты" if rewarded else "\nЛимит награды за еду на сегодня уже достигнут."
