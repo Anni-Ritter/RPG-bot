@@ -15,7 +15,7 @@ from app.db import SessionLocal
 
 router = Router()
 logger = logging.getLogger(__name__)
-RELEASE = '2026-10-27-shop-deploy-fix'
+RELEASE = '2026-10-27-live-chat-presence-v2'
 
 
 @router.message(Command('version', 'botversion'))
@@ -23,6 +23,7 @@ async def version(message: Message) -> None:
     await message.answer(
         f'✅ Селин и Тори — {RELEASE}\n'
         'Лавка странствий: обработчик подключён.\n'
+        'Разговор без кнопки завершения; /selin_status показывает реальные изменения.\n'
         'Открой /shop, а если будет ошибка — /shopcheck.'
     )
 

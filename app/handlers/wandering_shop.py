@@ -15,6 +15,7 @@ from app.db import SessionLocal
 from app.models import UserProfile
 from app.services.ai_features import reserve_ai_call
 from app.services.ai_engine import ai_enabled
+from app.services.typing_status import while_typing
 from app.services.rewards import get_or_create_profile
 from app.services.wandering_shop import (
     OwnedWorldItem, ShopOffer, current_offers, get_state, install_rotation, inventory,
@@ -93,7 +94,7 @@ async def shop_by_command(message: Message) -> None:
     # A first-time AI catalog can take a while. Acknowledge before waiting.
     progress = await message.answer('🏮 Торговец готовит ассортимент…')
     try:
-        await ensure_shop(message.from_user.id, message.from_user.full_name, initial_only=True)
+        await while_typing(message, ensure_shop(message.from_user.id, message.from_user.full_name, initial_only=True))
         text, markup = await render_shop(message.from_user.id)
     except Exception:
         logger.exception('Shop opening failed for user_id=%s', message.from_user.id)
@@ -117,7 +118,8 @@ async def shop_by_command(message: Message) -> None:
 async def open_shop(callback: CallbackQuery) -> None:
     await callback.answer()
     try:
-        await ensure_shop(callback.from_user.id, callback.from_user.full_name, initial_only=True)
+        await while_typing(callback.message, ensure_shop(
+            callback.from_user.id, callback.from_user.full_name, initial_only=True))
     except Exception as exc:
         await callback.message.answer(f'Не удалось открыть лавку: {str(exc)[:180]}')
         return
@@ -178,7 +180,8 @@ async def confirm_reroll(callback: CallbackQuery) -> None:
 async def reroll(callback: CallbackQuery) -> None:
     await callback.answer()
     try:
-        generated, cost = await ensure_shop(callback.from_user.id, callback.from_user.full_name, refresh=True)
+        generated, cost = await while_typing(callback.message, ensure_shop(
+            callback.from_user.id, callback.from_user.full_name, refresh=True))
     except ValueError as exc:
         await callback.message.answer(str(exc))
         return
@@ -215,7 +218,7 @@ async def buy_item(callback: CallbackQuery) -> None:
             await callback.message.answer('Не удалось завершить покупку. Проверь лавку и баланс.')
             return
     # Narrative failure cannot undo a successful purchase or charge twice.
-    reaction = await narrate_purchase_or_use(item, 'purchase', profile.id)
+    reaction = await while_typing(callback.message, narrate_purchase_or_use(item, 'purchase', profile.id))
     try:
         async with SessionLocal() as session:
             await save_reaction(session, profile.id, item_id, reaction)
@@ -303,7 +306,7 @@ async def use(callback: CallbackQuery) -> None:
         except ValueError as exc:
             await callback.message.answer(str(exc))
             return
-    reaction = await narrate_purchase_or_use(item, 'use', profile.id)
+    reaction = await while_typing(callback.message, narrate_purchase_or_use(item, 'use', profile.id))
     async with SessionLocal() as session:
         await save_reaction(session, profile.id, item_id, reaction, event_type='scene')
         await session.commit()

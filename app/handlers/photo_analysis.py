@@ -26,6 +26,7 @@ from app.services.ai_engine import ai_enabled, analyze_activity_image, analyze_f
 from app.services.ai_features import reserve_ai_call
 from app.services.challenge_feedback import check_and_notify_challenges
 from app.services.assets import send_reaction
+from app.services.typing_status import while_typing
 from app.services.nutrition import (
     can_scale_by_grams,
     normalize_food_result,
@@ -401,10 +402,10 @@ async def _analyze_from_state(message: Message, user: User, state: FSMContext, *
 
         if kind == "food":
             comment = str(data.get("food_comment") or "").strip()
-            result = normalize_food_result(await analyze_food_images(images, user_comment=comment))
+            result = normalize_food_result(await while_typing(message, analyze_food_images(images, user_comment=comment)))
             result["user_comment"] = comment
         else:
-            result = await analyze_activity_image(images[0][0], images[0][1])
+            result = await while_typing(message, analyze_activity_image(images[0][0], images[0][1]))
     except Exception as exc:
         print("AI image analysis error:", repr(exc))
         await _edit_flow_message(

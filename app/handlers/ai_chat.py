@@ -27,11 +27,12 @@ from app.services.assets import send_reaction
 from app.services.dialogue import get_tori_autonomous_response
 from app.services.rewards import get_or_create_profile
 from app.services.tori import reward_tori_interaction
+from app.services.typing_status import while_typing
 from app.services.story import advance_week1_if_due, get_or_create_story_progress, initialize_week1_v2, selin_chat_gate
 
 router = Router()
 
-CHAT_IDLE_MINUTES = 45
+CHAT_IDLE_MINUTES = 24 * 60
 
 
 def _should_switch_to_action(text: str) -> bool:
@@ -132,13 +133,7 @@ async def _supersede_initiative_chats(
 
 
 async def _current_chat_markup(state: FSMContext):
-    current_state = await state.get_state()
-    if current_state == FreeSelinChatState.talking.state:
-        return ai_chat_stop_menu()
-    if current_state == InitiativeSelinChatState.talking.state:
-        notification_id = (await state.get_data()).get("initiative_notification_id")
-        if notification_id:
-            return ai_initiative_stop_menu(int(notification_id))
+    # Natural chat has no manual end; existing old stop callbacks still work.
     return None
 
 
@@ -174,7 +169,6 @@ async def start_free_chat(callback: CallbackQuery, state: FSMContext) -> None:
         "selin",
         "curious",
         "— Ладно, я слушаю. Можем говорить сколько хочешь, пока связь по сюжету не занята чем-то более весёлым.",
-        reply_markup=ai_chat_stop_menu(),
     )
     await callback.answer()
 
@@ -211,6 +205,9 @@ async def free_chat_message(
     if user_text in NAVIGATION_TEXTS:
         await state.clear()
         raise SkipHandler
+    if user_text.startswith('/'):
+        await state.clear()
+        raise SkipHandler
 
     today = now_local().date()
     async with SessionLocal() as session:
@@ -236,12 +233,12 @@ async def free_chat_message(
         await session.commit()
 
     try:
-        result = await generate_selin_reply(
+        result = await while_typing(message, generate_selin_reply(
             user_text=user_text,
             context=context,
             recent_chat=recent,
             can_offer_quest=can_offer,
-        )
+        ))
     except Exception as exc:
         print("AI chat error:", repr(exc))
         await message.answer("Связь с Селин сейчас сбоила. Попробуй ещё раз чуть позже.")
@@ -253,7 +250,9 @@ async def free_chat_message(
         ai_state = await get_or_create_ai_state(session, profile)
         append_recent_message(ai_state, "user", user_text)
         append_recent_message(ai_state, "assistant", str(result.get("text", "")))
-        await store_ai_memories(session, profile.id, result.get("memories_to_save"), source="selin_chat")
+        saved_memory_count = await store_ai_memories(
+            session, profile.id, result.get("memories_to_save"), source="selin_chat"
+        )
 
         if result.get("offer_quest") and await can_offer_ai_quest(session, profile.id, today):
             title = (result.get("quest_title") or "").strip()
@@ -268,6 +267,8 @@ async def free_chat_message(
         await session.commit()
 
     text = str(result.get("text") or "Хм.")
+    if saved_memory_count:
+        text += "\n\n🧠 Сохранила деталь в памяти. Настройки не меняла. /selin_status"
     if offer:
         text += (
             f"\n\n📜 Селин предлагает задание: {offer.title}"
@@ -277,7 +278,7 @@ async def free_chat_message(
             text += f"\n{offer.reason}"
         markup = ai_quest_offer_menu(offer.id)
     else:
-        markup = ai_chat_stop_menu()
+        markup = None
 
     await send_reaction(
         message,
@@ -330,10 +331,9 @@ async def start_initiative_chat(callback: CallbackQuery, state: FSMContext) -> N
     await state.set_state(InitiativeSelinChatState.talking)
     await state.update_data(initiative_notification_id=notification_id, last_chat_activity_at=now_local().isoformat())
     await callback.answer()
-    # Не плодим промежуточное "я слушаю". Само сообщение Селин уже является
-    # началом разговора; после нажатия просто меняем кнопки на завершение.
+    # Do not insert a synthetic reply or a mandatory stop button.
     try:
-        await callback.message.edit_reply_markup(reply_markup=ai_initiative_stop_menu(notification_id))
+        await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
 
@@ -398,6 +398,9 @@ async def _handle_initiative_message(
     if user_text in NAVIGATION_TEXTS:
         await state.clear()
         raise SkipHandler
+    if user_text.startswith('/'):
+        await state.clear()
+        raise SkipHandler
 
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
@@ -421,12 +424,12 @@ async def _handle_initiative_message(
         await session.commit()
 
     try:
-        result = await generate_selin_reply(
+        result = await while_typing(message, generate_selin_reply(
             user_text=user_text,
             context=context,
             recent_chat=recent,
             can_offer_quest=False,
-        )
+        ))
     except Exception as exc:
         print("AI initiative reply error:", repr(exc))
         await message.answer("Связь сейчас сбоила. Попробуй ответить ещё раз чуть позже.")
@@ -448,12 +451,16 @@ async def _handle_initiative_message(
         ai_state = await get_or_create_ai_state(session, profile)
         append_recent_message(ai_state, "user", user_text)
         append_recent_message(ai_state, "assistant", str(result.get("text") or ""))
-        await store_ai_memories(session, profile.id, result.get("memories_to_save"), source="initiative_chat")
+        saved_memory_count = await store_ai_memories(
+            session, profile.id, result.get("memories_to_save"), source="initiative_chat"
+        )
         notification.payload = payload
         await session.commit()
 
     text = str(result.get("text") or "Хм.")
-    markup = ai_initiative_stop_menu(notification_id)
+    if saved_memory_count:
+        text += "\n\n🧠 Сохранила деталь в памяти. Настройки не меняла. /selin_status"
+    markup = None
 
     await send_reaction(
         message,

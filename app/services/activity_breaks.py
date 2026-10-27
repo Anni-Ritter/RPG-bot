@@ -62,6 +62,21 @@ _RESTRICTION = re.compile(
 )
 
 
+# Colloquial variants: "na trenirovki ne budu hodit" / "ne poidu v zal".
+_COLLOQUIAL = re.compile(
+    r"(?:\b(?:на\s+тренировк[а-я]*|в\s+зал|заниматься\s+спортом)"
+    r"\s+(?:(?:я|пока|вообще|больше)\s+){0,3}не\s+"
+    r"(?:буду|пойду|хожу|смогу|попаду)\b|"
+    r"\bне\s+(?:буду|пойду|хожу|смогу|попаду)\b"
+    r"(?:\s+[а-я]+){0,6}\s+(?:на\s+тренировк[а-я]*|в\s+зал|тренироваться)\b)",
+    re.I,
+)
+_NEAR_WEEK = re.compile(
+    r"\b(?:в|на)?\s*(?:ближайшую|следующую|эту|целую|предстоящую)\s+неделю\b"
+    r"|\bв\s+течение\s+недели\b", re.I,
+)
+
+
 def parse_break_proposal(text: str) -> BreakProposal | None:
     """Only overt statements *with a duration*; never infer a medical diagnosis."""
     src = str(text or "").lower().strip()
@@ -69,15 +84,18 @@ def parse_break_proposal(text: str) -> BreakProposal | None:
         return None
     if re.search(r"\bне\s+могу\s+без\s+(?:спорта|тренировок)\b", src):
         return None
-    if not _RESTRICTION.search(src):
+    if not (_RESTRICTION.search(src) or _COLLOQUIAL.search(src)):
         return None
     match = _DURATION.search(src)
-    if not match:
+    if match:
+        num = match.group("n")
+        qty = int(num) if num.isdigit() else _WORDS.get(num, 0)
+        unit = match.group("u")
+        days = qty * (7 if unit.startswith("недел") else 30 if unit.startswith("месяц") else 1)
+    elif _NEAR_WEEK.search(src):
+        days = 7
+    else:
         return None
-    num = match.group("n")
-    qty = int(num) if num.isdigit() else _WORDS.get(num, 0)
-    unit = match.group("u")
-    days = qty * (7 if unit.startswith("недел") else 30 if unit.startswith("месяц") else 1)
     if not 1 <= days <= 90:
         return None
     reason = "tattoo" if "тату" in src else "rest"

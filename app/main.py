@@ -40,7 +40,7 @@ async def main() -> None:
         await session.commit()
 
     bot = Bot(settings.bot_token)
-    log.info("SELIN_RELEASE=2026-10-27-shop-deploy-fix; main=%s", __file__)
+    log.info("SELIN_RELEASE=2026-10-27-live-chat-presence-v2; main=%s", __file__)
     dp = Dispatcher()
     # Run before the active chat FSM routes: even an ordinary message can set a pause.
     dp.message.outer_middleware(ActivityBreakMiddleware())

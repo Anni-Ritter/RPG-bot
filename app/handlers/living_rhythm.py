@@ -25,6 +25,7 @@ from app.services.living_rhythm import (
 )
 from app.services.living_rhythm_ai import enrich_confirmable_items, interpret, likely_relevant, recipe_match
 from app.services.rewards import get_or_create_profile
+from app.services.typing_status import while_typing
 
 router = Router()
 _processing: set[int] = set()
@@ -99,7 +100,7 @@ async def _offer(message: Message, actor, parsed: dict) -> bool:
     try:
         async with SessionLocal() as session:
             profile = await get_or_create_profile(session, actor.id, actor.full_name)
-            items = await enrich_confirmable_items(session, profile.id, parsed['items'])
+            items = await while_typing(message, enrich_confirmable_items(session, profile.id, parsed['items']))
             kind = parsed['meal_kind']
             if kind not in KINDS or kind == 'unknown':
                 if all(item['category'] in {'snack', 'treat'} for item in items):
@@ -142,7 +143,7 @@ async def handle_chat_capture(message: Message, actor, text: str) -> bool:
     if not likely_relevant(text):
         return False
     try:
-        parsed = await _get_interpretation(actor.id, text)
+        parsed = await while_typing(message, _get_interpretation(actor.id, text))
     except Exception as exc:
         print('[LIVING_RHYTHM] intent failed:', repr(exc))
         return False
@@ -166,7 +167,7 @@ async def live_text_message(message: Message, state: FSMContext) -> None:
     if not likely_relevant(text):
         raise SkipHandler
     try:
-        parsed = await _get_interpretation(message.from_user.id, text)
+        parsed = await while_typing(message, _get_interpretation(message.from_user.id, text))
     except Exception as exc:
         print('[LIVING_RHYTHM] intent failed:', repr(exc))
         raise SkipHandler
@@ -205,8 +206,9 @@ async def live_text_message(message: Message, state: FSMContext) -> None:
         recent = recent_chat_text(ai_state)
         await session.commit()
     try:
-        response = await generate_selin_reply(user_text=text, context=context,
-                                              recent_chat=recent, can_offer_quest=False)
+        response = await while_typing(message, generate_selin_reply(
+            user_text=text, context=context,
+            recent_chat=recent, can_offer_quest=False))
     except Exception:
         raise SkipHandler
     async with SessionLocal() as session:

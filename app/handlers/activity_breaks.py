@@ -7,6 +7,8 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from sqlalchemy import select
+from app.models import UserMemory
 
 from app.db import SessionLocal
 from app.services.activity_breaks import (
@@ -50,8 +52,15 @@ class ActivityBreakMiddleware(BaseMiddleware):
         if isinstance(event, Message) and event.from_user and event.text:
             proposal = parse_break_proposal(event.text)
             if proposal:
-                await offer_break(event, proposal)
-                return None
+                # Avoid re-offering the same pause after it has been committed.
+                async with SessionLocal() as session:
+                    profile = await get_or_create_profile(
+                        session, event.from_user.id, event.from_user.full_name
+                    )
+                    active = is_in_effect(await get_break(session, profile.id), now_local().date())
+                if not active:
+                    await offer_break(event, proposal)
+                    return None
         return await handler(event, data)
 
 
@@ -89,6 +98,40 @@ async def activity_status_command(message: Message) -> None:
         )
     else:
         await message.answer("Сейчас спортивная пауза не установлена. /activity_pause 14 — установить.")
+
+
+@router.message(Command("selin_status", "what_saved"))
+async def selin_status_command(message: Message) -> None:
+    """Only DB-backed state is presented as an applied change."""
+    async with SessionLocal() as session:
+        profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
+        row = await get_break(session, profile.id)
+        memories = list((await session.scalars(
+            select(UserMemory)
+            .where(UserMemory.user_id == profile.id)
+            .order_by(UserMemory.updated_at.desc(), UserMemory.id.desc())
+            .limit(3)
+        )).all())
+        await session.commit()
+    if is_in_effect(row, now_local().date()):
+        break_text = (
+            "✅ " + "Спортивная пауза: "
+            + row.starts_on.strftime('%d.%m') + " - " + row.check_on.strftime('%d.%m.%Y')
+            + ". " + "Напоминания о зале и спортивные челленджи на паузе."
+        )
+    else:
+        break_text = "⚪ Спортивной паузы в базе нет."
+    if memories:
+        detail = "\n".join("• " + ' '.join(m.value.split())[:150] for m in memories)
+    else:
+        detail = "Пока ничего не сохранено."
+    await message.answer(
+        "📋 Что Селин действительно учитывает\n\n"
+        + break_text + "\n\n🧠 Из памяти диалогов:\n"
+        + detail + "\n\n"
+        + "Память о разговоре не равна изменению расписания. "
+        + "Спортивная пауза меняется только после подтверждения."
+    )
 
 
 @router.message(Command("activity_resume"))
@@ -129,6 +172,10 @@ async def activity_callback(callback: CallbackQuery) -> None:
     kind = parts[1]
     if kind == "no":
         await callback.answer()
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await callback.message.answer("Селин: — Хорошо, ничего не меняю.")
         return
 
@@ -140,11 +187,19 @@ async def activity_callback(callback: CallbackQuery) -> None:
         days, reason = int(parts[3]), parts[4]
         async with SessionLocal() as session:
             profile = await get_or_create_profile(session, callback.from_user.id, callback.from_user.full_name)
+            current = await get_break(session, profile.id)
+            if is_in_effect(current, now_local().date()):
+                await callback.answer("Пауза уже включена. Проверить: /activity_status", show_alert=True)
+                return
             row = await start_break(session, profile.id, days, reason)
             replaced = await adapt_today_challenges(session, profile.id, now_local().date())
             await session.commit()
             check_on = row.check_on
         await callback.answer("Спортивная пауза включена")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await callback.message.answer(
             "Селин: — Договорились. До " + check_on.strftime("%d.%m.%Y") +
             " я не напоминаю о тренировках и не даю спортивных испытаний. "
