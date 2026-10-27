@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import re
+import inspect
 from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import select
 
-from app.services.ai_engine import _structured_response, ai_enabled, analyze_food_text
+from app.services import ai_engine
+from app.services.ai_engine import _structured_response, ai_enabled
 from app.services.nutrition import normalize_food_result
 
 CUE = re.compile(
@@ -138,6 +140,65 @@ async def recipe_match(session, user_id: int, name: str):
     return ranked[0][1]
 
 
+# Not every installed edition of Selin has the text-food helper.
+# The structured JSON API is the actual dependency. If the helper is absent,
+# estimate conservatively through that API rather than preventing startup.
+FALLBACK_FOOD_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'summary': {'type': 'string'},
+        'category': {'type': 'string', 'enum': ['meal', 'snack', 'treat', 'drink']},
+        'drink_kind': {'type': 'string', 'enum': ['plain', 'caloric', 'energy', 'unknown']},
+        'confidence': {'type': 'string', 'enum': ['low']},
+        'nutrition_source': {'type': 'string', 'enum': ['text_estimate']},
+        'reference_grams': {'type': ['number', 'null']},
+        'calories_kcal': {'type': ['number', 'null']},
+        'protein_g': {'type': ['number', 'null']},
+        'fat_g': {'type': ['number', 'null']},
+        'carbs_g': {'type': ['number', 'null']},
+        'note': {'type': 'string'},
+    },
+    'required': [
+        'summary', 'category', 'drink_kind', 'confidence', 'nutrition_source',
+        'reference_grams', 'calories_kcal', 'protein_g', 'fat_g', 'carbs_g', 'note',
+    ],
+    'additionalProperties': False,
+}
+
+
+async def estimate_food_text(description: str) -> dict:
+    '''Use an installed text-food helper when available, otherwise our safe fallback.'''
+    helper = getattr(ai_engine, 'analyze_food_text', None)
+    if callable(helper):
+        result = helper(description)
+        if inspect.isawaitable(result):
+            result = await result
+        if not isinstance(result, dict):
+            raise TypeError('Text-food analysis must return a dict')
+        return result
+    result = await _structured_response(
+        system=(
+            'Ты оцениваешь еду только по тексту, без фотографий и этикеток. '
+            'Не выдумывай точные значения КБЖУ, граммы или состав. '
+            'Если порция и состав неизвестны, ставь null в числовых полях '
+            'и попроси уточнение в note. Если оценка уместна, она только приблизительная. '
+            'nutrition_source всегда text_estimate, confidence всегда low. '
+            'Категория meal/snack/treat/drink; drink_kind plain/caloric/energy/unknown. '
+            'Дай короткое название в summary. Только JSON.'
+        ),
+        user_content='Описание съеденного (одна порция, без фото): ' + description[:1200],
+        schema_name='selin_living_food_text_compat_v1',
+        schema=FALLBACK_FOOD_SCHEMA,
+        max_tokens=420,
+    )
+    if not isinstance(result, dict):
+        raise TypeError('Fallback text-food analysis must return a dict')
+    # Defensive normalization; no text-only call may claim a photo/label source.
+    result['nutrition_source'] = 'text_estimate'
+    result['confidence'] = 'low'
+    return result
+
+
 async def enrich_confirmable_items(session, user_id: int, items: list[dict]) -> list[dict]:
     """Build a snapshot for a preview. Uses existing recipes first.
 
@@ -157,7 +218,7 @@ async def enrich_confirmable_items(session, user_id: int, items: list[dict]) -> 
         unknown_count += 1
         if unknown_count > 3:
             raise ValueError('За один раз можно оценить не более 3 новых продуктов; сохранённые рецепты без лимита.')
-        result = normalize_food_result(await analyze_food_text(f'{name}; количество: одна обычная порция'))
+        result = normalize_food_result(await estimate_food_text(f'{name}; количество: одна обычная порция'))
         result['category'] = item['category']
         if result.get('nutrition_source') not in {'text_estimate', 'label'}:
             result['nutrition_source'] = 'text_estimate'

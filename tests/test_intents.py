@@ -43,3 +43,33 @@ async def run():
     print('PASS: cravings/plans/negation never produce write suggestions, two confirmed items recognized, yesterday not logged as today')
 
 asyncio.run(run())
+
+
+# Compatibility regression: the older ai_engine has no analyze_food_text.
+async def verify_legacy_engine():
+    previous = getattr(engine, 'analyze_food_text', None)
+    if hasattr(engine, 'analyze_food_text'):
+        delattr(engine, 'analyze_food_text')
+    try:
+        calls = []
+        async def legacy_structured(**kwargs):
+            calls.append(kwargs)
+            return {
+                'summary': 'неизвестный кофе', 'category': 'drink',
+                'drink_kind': 'unknown', 'confidence': 'low',
+                'nutrition_source': 'text_estimate', 'reference_grams': None,
+                'calories_kcal': None, 'protein_g': None, 'fat_g': None,
+                'carbs_g': None, 'note': 'Уточни объём',
+            }
+        intent._structured_response = legacy_structured
+        result = await intent.estimate_food_text('кофе, без подробностей')
+        assert result['confidence'] == 'low'
+        assert result['calories_kcal'] is None
+        assert calls and calls[0]['schema_name'] == 'selin_living_food_text_compat_v1'
+        assert calls[0]['schema']['additionalProperties'] is False
+        print('PASS: legacy AI engine without analyze_food_text uses safe structured fallback')
+    finally:
+        if previous is not None:
+            engine.analyze_food_text = previous
+
+asyncio.run(verify_legacy_engine())

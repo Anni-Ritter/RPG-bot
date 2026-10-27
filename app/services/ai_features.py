@@ -410,3 +410,29 @@ async def build_ai_context(session: AsyncSession, profile: UserProfile) -> dict:
         "coach_rules": await get_coach_rules(session, profile.id),
         "previous_focus": (previous_review.tomorrow_focus or "").strip() if previous_review else "",
     }
+
+# SELIN_LIVING_RHYTHM_20261027_BEGIN
+_living_rhythm_previous_context = build_ai_context
+
+async def build_ai_context(session, profile):
+    result = await _living_rhythm_previous_context(session, profile)
+    from app.services.living_rhythm import context_summary
+    notes = await context_summary(session, profile.id)
+    context = dict(result)
+    context['memories'] = (str(result.get('memories') or '') + '\n' + notes).strip()
+    return context
+# SELIN_LIVING_RHYTHM_20261027_END
+
+# SELIN_WANDER_SHOP_20261027_BEGIN
+_wander_shop_previous_build_ai_context = build_ai_context
+
+async def build_ai_context(session, profile):
+    result = await _wander_shop_previous_build_ai_context(session, profile)
+    from app.services.wandering_shop import inventory_context
+    items = await inventory_context(session, profile.id)
+    if not items:
+        return result
+    result = dict(result)
+    result['memories'] = (str(result.get('memories') or '') + '\n' + items).strip()
+    return result
+# SELIN_WANDER_SHOP_20261027_END

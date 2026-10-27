@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 from typing import Any
 
@@ -117,6 +118,11 @@ FOOD_SCHEMA = {
     ],
     "additionalProperties": False,
 }
+
+# Keep the photo-recognition schema unchanged. Text-only entries need an extra
+# nutrition_source value, but photo recognition must not share a modified schema.
+FOOD_TEXT_SCHEMA = copy.deepcopy(FOOD_SCHEMA)
+FOOD_TEXT_SCHEMA["properties"]["nutrition_source"]["enum"].insert(-1, "text_estimate")
 
 ACTIVITY_SCHEMA = {
     "type": "object",
@@ -387,6 +393,29 @@ async def generate_selin_initiative(*, context: dict[str, Any], can_offer_quest:
         schema_name="selin_initiative_v9",
         schema=CHAT_SCHEMA,
         max_tokens=320,
+    )
+
+
+async def analyze_food_text(description: str) -> dict:
+    """Estimate a food/drink from text only; do not impersonate a label or photo."""
+    system = """
+Ты помогаешь записать еду или напиток в личном дневнике по ОДНОМУ ТЕКСТОВОМУ описанию пользователя, без фото.
+Если пользователь сообщил КБЖУ на 100 г и съеденное количество, пересчитай его аккуратно.
+Если указана только еда/название кафе (например, «выпила какао из кофейни»), укажи диапазон оценки,
+confidence=low, nutrition_source=text_estimate. Не выдавай число за измеренное.
+У кафе сильно меняются молоко, сироп, объём, поэтому не придумывай точный рецепт.
+Если есть только описание без объёма, можно оставить калории null и попросить уточнение в note.
+Если пользователь передал конкретные цифры КБЖУ, nutrition_source=label, только если он прямо их указал;
+иначе text_estimate. Поля per_100g заполняй лишь по известным значениям. Не путай число на 100 г и на порцию.
+Категории: meal, snack, treat, drink; у напитков drink_kind=plain/caloric/energy/unknown.
+Не выдумывай, что видела изображение, и не делай выводов о здоровье или весе.
+""".strip()
+    return await _structured_response(
+        system=system,
+        user_content=f"Запиши по описанию (только одна порция): {description[:2000]}",
+        schema_name="food_text_analysis_v23",
+        schema=FOOD_TEXT_SCHEMA,
+        max_tokens=670,
     )
 
 

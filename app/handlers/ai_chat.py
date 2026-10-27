@@ -196,7 +196,13 @@ async def free_chat_message(
 ) -> None:
     user_text = (user_text_override if user_text_override is not None else (message.text or "")).strip()
     actor = actor_override or message.from_user
-    if actor_override is None and (_dialog_idle(await state.get_data()) or _should_switch_to_action(user_text)):
+    # SELIN_LIVING_RHYTHM_20261027_BEGIN
+    from app.handlers.living_rhythm import handle_chat_capture
+    if await handle_chat_capture(message, actor, user_text):
+        await state.update_data(last_chat_activity_at=now_local().isoformat())
+        return
+    # SELIN_LIVING_RHYTHM_20261027_END
+    if actor_override is None and _dialog_idle(await state.get_data()):
         await state.clear()
         raise SkipHandler
     await state.update_data(last_chat_activity_at=now_local().isoformat())
@@ -384,6 +390,9 @@ async def _handle_initiative_message(
     notification_id: int,
 ) -> None:
     user_text = (message.text or "").strip()
+    from app.handlers.living_rhythm import handle_chat_capture
+    if await handle_chat_capture(message, message.from_user, user_text):
+        return
     if not user_text:
         return
     if user_text in NAVIGATION_TEXTS:
@@ -465,7 +474,7 @@ async def _handle_initiative_message(
 @router.message(InitiativeSelinChatState.talking, F.text)
 async def initiative_chat_message(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    if _dialog_idle(data) or _should_switch_to_action(message.text or ""):
+    if _dialog_idle(data):
         await state.clear()
         raise SkipHandler
     await state.update_data(last_chat_activity_at=now_local().isoformat())

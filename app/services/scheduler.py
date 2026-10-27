@@ -486,3 +486,12 @@ async def notification_worker(bot: Bot) -> None:
         except Exception as exc:
             print("notification_worker error:", repr(exc))
         await asyncio.sleep(30)
+
+# SELIN_LIVING_RHYTHM_20261027_BEGIN
+_living_rhythm_original_send_due = send_due
+
+async def send_due(bot):
+    from app.services.living_rhythm import suppress_nonessential_autonomy
+    await suppress_nonessential_autonomy()
+    return await _living_rhythm_original_send_due(bot)
+# SELIN_LIVING_RHYTHM_20261027_END

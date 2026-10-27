@@ -253,6 +253,7 @@ def _nutrition_source_label(value: str) -> str:
         "label": "по этикетке / КБЖУ",
         "mixed": "по этикетке + фото блюда",
         "photo_estimate": "примерная оценка по фото",
+        "text_estimate": "примерная оценка по описанию",
         "none": "не определён",
     }.get(value, "не определён")
 

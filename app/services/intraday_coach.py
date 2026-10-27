@@ -100,3 +100,12 @@ async def create_intraday_food_feedback(
         "text": str(result.get("text") or "").strip(),
         "emotion": str(result.get("emotion") or "neutral"),
     }
+
+# SELIN_LIVING_RHYTHM_20261027_BEGIN
+# The new worker sends ONE deferred review after a whole meal, not one per item.
+# The regular daily/evening review is unchanged.
+_living_rhythm_original_intraday = create_intraday_food_feedback
+
+async def create_intraday_food_feedback(user_id, display_name, *, latest_action):
+    return None
+# SELIN_LIVING_RHYTHM_20261027_END

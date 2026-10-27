@@ -64,6 +64,8 @@ def food_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📊 Анализ питания за несколько дней", callback_data="nutritionhistory:menu")],
             [InlineKeyboardButton(text="🔁 Повторить последнюю запись", callback_data="recipe:last")],
             [InlineKeyboardButton(text="🧠 Искушение", callback_data="food:temptation")],
+            [InlineKeyboardButton(text="🌿 Живой ритм", callback_data="rhythm:settings")],
+            [InlineKeyboardButton(text="🗓 Приёмы пищи", callback_data="rhythm:diary")],
         ]
     )
 
@@ -140,6 +142,7 @@ def wardrobe_menu(chests: int) -> InlineKeyboardMarkup:
     buttons.extend(
         [
             [InlineKeyboardButton(text="📚 Мои свитки", callback_data="wardrobe:list")],
+            [InlineKeyboardButton(text="🏮 Лавка странствий", callback_data="wander:open")],
             [InlineKeyboardButton(text="🪙 Ателье", callback_data="shop:atelier")],
             [InlineKeyboardButton(text="✨ Пыль ателье", callback_data="shop:dust")],
         ]

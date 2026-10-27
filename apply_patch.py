@@ -281,7 +281,7 @@ def validate(root: Path) -> list[str]:
         'app/main.py': ['async def main() -> None:', 'dp.include_router(ai_chat.router)',
                         'worker = asyncio.create_task(notification_worker(bot))', 'worker.cancel()'],
         'app/services/ai_features.py': ['async def build_ai_context(', 'async def reserve_ai_call('],
-        'app/services/ai_engine.py': ['async def _structured_response(', 'async def analyze_food_text(', 'async def generate_selin_reply('],
+        'app/services/ai_engine.py': ['async def _structured_response(', 'async def generate_selin_reply('],
         'app/services/nutrition.py': ['async def record_food_nutrition(', 'await session.flush()'],
         'app/services/intraday_coach.py': ['async def create_intraday_food_feedback('],
         'app/services/scheduler.py': ['async def send_due('],

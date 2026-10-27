@@ -104,3 +104,19 @@ async def build_nutrition_history(
         "history_text": "\n\n".join(day_texts),
         "repeated_text": top_dishes,
     }
+
+# SELIN_LIVING_RHYTHM_20261027_BEGIN
+_living_rhythm_original_history = build_nutrition_history
+
+async def build_nutrition_history(session, user_id, *, days, today):
+    result = await _living_rhythm_original_history(session, user_id, days=days, today=today)
+    from datetime import timedelta
+    from app.services.living_rhythm import grouped_history_text
+    groups = await grouped_history_text(session, user_id, today - timedelta(days=days), today - timedelta(days=1))
+    if groups:
+        result = dict(result)
+        result['history_text'] = str(result.get('history_text') or '') + (
+            '\n\nГруппы подтверждённых приёмов пищи (одна группа может включать несколько позиций):\n' + groups
+        )
+    return result
+# SELIN_LIVING_RHYTHM_20261027_END

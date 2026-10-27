@@ -237,3 +237,13 @@ async def daily_protein_meal_count(session: AsyncSession, user_id: int, day: dat
         )
     )
     return int(count or 0)
+
+# SELIN_LIVING_RHYTHM_20261027_BEGIN
+_living_rhythm_record_food_nutrition = record_food_nutrition
+
+async def record_food_nutrition(session, **kwargs):
+    row = await _living_rhythm_record_food_nutrition(session, **kwargs)
+    from app.services.living_rhythm import observe_entry
+    await observe_entry(session, row)
+    return row
+# SELIN_LIVING_RHYTHM_20261027_END

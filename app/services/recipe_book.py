@@ -212,3 +212,24 @@ def recipe_from_ai(*, user_id: int, details: dict[str, Any], name: str | None = 
         protein_g=_num(details.get("protein_g")), fat_g=_num(details.get("fat_g")),
         carbs_g=_num(details.get("carbs_g")),
     )
+
+# SELIN_LIVING_RHYTHM_20261027_BEGIN
+_living_rhythm_original_record_recipe_serving = record_recipe_serving
+
+async def record_recipe_serving(session, profile, recipe, day, **kwargs):
+    previous = session.info.get('lr_recipe_id')
+    previous_portion = session.info.get('lr_portions')
+    session.info['lr_recipe_id'] = recipe.id
+    session.info['lr_portions'] = kwargs.get('fraction', 1.0)
+    try:
+        return await _living_rhythm_original_record_recipe_serving(session, profile, recipe, day, **kwargs)
+    finally:
+        if previous is None:
+            session.info.pop('lr_recipe_id', None)
+        else:
+            session.info['lr_recipe_id'] = previous
+        if previous_portion is None:
+            session.info.pop('lr_portions', None)
+        else:
+            session.info['lr_portions'] = previous_portion
+# SELIN_LIVING_RHYTHM_20261027_END
