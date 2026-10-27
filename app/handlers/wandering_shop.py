@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -87,8 +90,26 @@ async def respond(callback: CallbackQuery, text: str, markup: InlineKeyboardMark
 @router.message(Command('shop', 'lavka'))
 @router.message(F.text == '🏮 Лавка странствий')
 async def shop_by_command(message: Message) -> None:
-    await ensure_shop(message.from_user.id, message.from_user.full_name, initial_only=True)
-    await send_shop(message, message.from_user.id)
+    # A first-time AI catalog can take a while. Acknowledge before waiting.
+    progress = await message.answer('🏮 Торговец готовит ассортимент…')
+    try:
+        await ensure_shop(message.from_user.id, message.from_user.full_name, initial_only=True)
+        text, markup = await render_shop(message.from_user.id)
+    except Exception:
+        logger.exception('Shop opening failed for user_id=%s', message.from_user.id)
+        text = ('Не удалось открыть лавку. Монеты за открытие не списываются.\n'
+                'Напиши /shopcheck: он проверит доступность таблиц магазина. '
+                'Если там ошибка, пришли её текст.')
+        try:
+            await progress.edit_text(text)
+        except Exception:
+            await message.answer(text)
+        return
+    try:
+        await progress.edit_text(text, reply_markup=markup)
+    except Exception:
+        logger.exception('Could not edit shop placeholder; sending a fresh message')
+        await message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data == 'wander:open')

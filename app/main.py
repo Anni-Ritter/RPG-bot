@@ -1,4 +1,8 @@
 import asyncio
+import logging
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("selin.startup")
 
 from aiogram import Bot, Dispatcher
 
@@ -18,6 +22,7 @@ from app.services.living_rhythm_worker import rhythm_worker
 # SELIN_WANDER_SHOP_20261027_BEGIN
 from app.services import wandering_shop as _wandering_shop_model_registry
 from app.handlers import wandering_shop as wandering_shop_handlers
+from app.handlers import release_status as release_status_handlers
 # SELIN_WANDER_SHOP_20261027_END
 
 # SELIN_ACTIVITY_BREAK_20261027_BEGIN
@@ -35,10 +40,14 @@ async def main() -> None:
         await session.commit()
 
     bot = Bot(settings.bot_token)
+    log.info("SELIN_RELEASE=2026-10-27-shop-deploy-fix; main=%s", __file__)
     dp = Dispatcher()
     # Run before the active chat FSM routes: even an ordinary message can set a pause.
     dp.message.outer_middleware(ActivityBreakMiddleware())
     dp.include_router(activity_break_handlers.router)
+    # Explicit commands before chat/FSM handlers, regardless of current conversation.
+    dp.include_router(release_status_handlers.router)
+    dp.include_router(wandering_shop_handlers.router)
     dp.include_router(common.router)
     dp.include_router(coaching.router)
     dp.include_router(nutrition_history.router)
@@ -48,7 +57,6 @@ async def main() -> None:
     dp.include_router(tori_chat.router)
     dp.include_router(recipe_book.router)
     dp.include_router(living_rhythm_handlers.router)
-    dp.include_router(wandering_shop_handlers.router)
     dp.include_router(ai_chat.router)
     dp.include_router(workouts.router)
     dp.include_router(self_workouts.router)
