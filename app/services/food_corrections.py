@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AIImageAnalysis, DailyStat, FoodNutritionLog, GameEvent
-from app.services.living_rhythm import RhythmMeal, RhythmMealItem, kind_at, now_local
+from app.services.living_rhythm import RhythmMeal, RhythmMealItem, aware, kind_at, now_local
 from app.services.nutrition import daily_nutrition_totals
 
 WINDOW_DAYS = 30
@@ -164,7 +164,7 @@ async def apply_correction(session: AsyncSession, user_id: int, log_id: int,
                     group = await session.get(RhythmMeal, item.meal_id)
                     if group:
                         group.kind = (group.kind if changes['category'] == 'meal' and group.kind in {'breakfast', 'lunch', 'dinner'}
-                                      else kind_at(now_local(), changes['category']))
+                                      else kind_at(aware(group.started_at), changes['category']))
                 item.category = changes['category']
         after = await _group_counts(session, log, replace_category=changes.get('category'))
     # If category changes to drink, do not invent a drink type.

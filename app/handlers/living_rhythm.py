@@ -79,10 +79,86 @@ async def _get_interpretation(user_id: int, text: str) -> dict | None:
         _processing.discard(user_id)
 
 
+async def _auto_log_known_recipes(message: Message, actor, parsed: dict) -> bool:
+    """One explicit consumed-message => one atomic meal, but only with clear recipes.
+
+    No photo guesses, partial nutrition estimates or guessed recipe matches are
+    automatically written. Telegram re-deliveries get a durable receipt.
+    """
+    from app.services.companion_actions import CompanionActionReceipt, action_receipt
+    from app.services.living_rhythm_ai import norm, EXPLICIT_FOOD
+    import re
+    source_text = message.text or ''
+    if (not EXPLICIT_FOOD.search(source_text) or re.search(
+            r'\b(?:не\s+(?:ела|пила|съела|выпила)|собираюсь|планирую|хочу)\b', source_text, re.I)):
+        return False
+    from sqlalchemy import select
+    items = list(parsed.get('items') or [])
+    if not 1 <= len(items) <= 3 or message.chat is None or message.message_id is None:
+        return False
+    try:
+        async with SessionLocal() as session:
+            profile = await get_or_create_profile(session, actor.id, actor.full_name)
+            # Serialise per user on PostgreSQL; receipt unique constraint also
+            # protects against duplicate delivery on concurrent workers.
+            from app.models import UserProfile
+            await session.scalar(select(UserProfile.id).where(UserProfile.id == profile.id).with_for_update())
+            previous = await action_receipt(session, actor.id, message.chat.id, message.message_id)
+            if previous:
+                await message.answer('— Этот приём пищи уже записан, второй раз не добавляю.')
+                return True
+            prepared = []
+            for item in items:
+                recipe = await recipe_match(session, profile.id, item['name'])
+                if recipe is None or recipe.category != item['category']:
+                    return False
+                source = norm(item['name'])
+                canonical = norm(recipe.name)
+                # Short catch-all terms like "кофе" are not an exact recipe.
+                if source != canonical and not (len(source) >= 8 and source in canonical):
+                    return False
+                if not 0 < float(item.get('quantity', 1)) <= 3:
+                    return False
+                prepared.append({**item, 'recipe_id': recipe.id, 'nutrition': {},
+                                 'source': 'recipe', 'calories_kcal': recipe.calories_kcal,
+                                 'confidence': recipe.confidence})
+            kind = parsed.get('meal_kind')
+            if kind not in KINDS or kind == 'unknown':
+                if all(x['category'] in {'snack','treat'} for x in prepared):
+                    kind = 'snack'
+                elif any(x['category'] == 'meal' for x in prepared):
+                    from app.services.living_rhythm import kind_at
+                    kind = kind_at(now_local(), 'meal')
+                else:
+                    kind = 'unknown'
+            proposal = await create_proposal(session, profile.id, kind, prepared)
+            meal, lines = await record_confirmed_group(session, profile, proposal)
+            session.add(CompanionActionReceipt(
+                user_id=profile.id, telegram_user_id=actor.id,
+                chat_id=message.chat.id, message_id=message.message_id,
+                action='log_known_recipes', payload={'meal_id': meal.id}))
+            await session.commit()
+    except Exception as exc:
+        print('[COMPANION] auto recipe logging failed:', repr(exc))
+        # Never tell the user it was saved after an unsuccessful transaction.
+        await message.answer('Не получилось надёжно записать по сохранённым рецептам. '
+                             'Проверь записи вручную через /meals; если записи нет — отправь снова.')
+        return True
+    await message.answer('✅ Записала в дневник одним приёмом пищи:\n' + '\n'.join(lines)
+                         + '\n\nУзнала сохранённые рецепты. Если состав изменился, скажи — исправим.')
+    try:
+        await check_and_notify_challenges(message, actor.id, actor.full_name)
+    except Exception as exc:
+        print('[COMPANION] rewards notification failed after saved meal:', repr(exc))
+    return True
+
+
 async def _offer(message: Message, actor, parsed: dict) -> bool:
     """The only path from an AI extraction to food is a reviewed proposal."""
     if parsed['intent'] != 'consumed' or not parsed['items']:
         return False
+    if await _auto_log_known_recipes(message, actor, parsed):
+        return True
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, actor.id, actor.full_name)
         # Saved recipes are cheap to repeat: don't consume vision quota.
@@ -211,6 +287,8 @@ async def live_text_message(message: Message, state: FSMContext) -> None:
             recent_chat=recent, can_offer_quest=False))
     except Exception:
         raise SkipHandler
+    from app.services.companion_actions import guard_unverified_claim
+    response['text'] = guard_unverified_claim(text, str(response.get('text') or 'Я слушаю.'))
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
         ai_state = await get_or_create_ai_state(session, profile)

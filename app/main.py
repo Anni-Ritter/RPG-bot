@@ -29,6 +29,9 @@ from app.handlers import release_status as release_status_handlers
 # Register the ORM model before init_db() creates SQL tables.
 from app.handlers import activity_breaks as activity_break_handlers
 from app.handlers import food_corrections as food_corrections_handlers
+from app.handlers import companion_actions as companion_actions_handlers
+from app.handlers import chat_fallback as chat_fallback_handlers
+from app.services import companion_actions as _companion_actions_model_registry
 from app.handlers.activity_breaks import ActivityBreakMiddleware
 from app.services import activity_breaks as _activity_break_model_registry
 # SELIN_ACTIVITY_BREAK_20261027_END
@@ -41,12 +44,13 @@ async def main() -> None:
         await session.commit()
 
     bot = Bot(settings.bot_token)
-    log.info("SELIN_RELEASE=2026-10-27-food-edit-v1; main=%s", __file__)
+    log.info("SELIN_RELEASE=2026-10-28-conversation-actions-v1; main=%s", __file__)
     dp = Dispatcher()
     # Run before the active chat FSM routes: even an ordinary message can set a pause.
     dp.message.outer_middleware(ActivityBreakMiddleware())
     dp.include_router(activity_break_handlers.router)
     # Diary corrections must reach the router before free-chat or quick-input fallbacks.
+    dp.include_router(companion_actions_handlers.router)
     dp.include_router(food_corrections_handlers.router)
     # Explicit commands before chat/FSM handlers, regardless of current conversation.
     dp.include_router(release_status_handlers.router)
@@ -65,6 +69,8 @@ async def main() -> None:
     dp.include_router(self_workouts.router)
     dp.include_router(gacha.router)
     dp.include_router(photo_analysis.router)
+    # Only for otherwise-unhandled ordinary text; commands and FSM flows keep priority.
+    dp.include_router(chat_fallback_handlers.router)
 
     worker = asyncio.create_task(notification_worker(bot))
     rhythm_task = asyncio.create_task(rhythm_worker(bot))

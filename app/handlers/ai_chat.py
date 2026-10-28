@@ -190,6 +190,10 @@ async def free_chat_message(
 ) -> None:
     user_text = (user_text_override if user_text_override is not None else (message.text or "")).strip()
     actor = actor_override or message.from_user
+    from app.handlers.companion_actions import handle_conversational_action
+    if await handle_conversational_action(message, actor, user_text):
+        await state.update_data(last_chat_activity_at=now_local().isoformat())
+        return
     from app.handlers.food_corrections import intercept_chat_food_edit
     if await intercept_chat_food_edit(message, actor, user_text):
         await state.update_data(last_chat_activity_at=now_local().isoformat())
@@ -248,6 +252,8 @@ async def free_chat_message(
         await message.answer("Связь с Селин сейчас сбоила. Попробуй ещё раз чуть позже.")
         return
 
+    from app.services.companion_actions import guard_unverified_claim
+    result["text"] = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
     offer = None
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, actor.id, actor.full_name)
@@ -270,7 +276,8 @@ async def free_chat_message(
                 )
         await session.commit()
 
-    text = str(result.get("text") or "Хм.")
+    from app.services.companion_actions import guard_unverified_claim
+    text = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
     if saved_memory_count:
         text += "\n\n🧠 Сохранила деталь в памяти. Настройки не меняла. /selin_status"
     if offer:
@@ -394,6 +401,9 @@ async def _handle_initiative_message(
     notification_id: int,
 ) -> None:
     user_text = (message.text or "").strip()
+    from app.handlers.companion_actions import handle_conversational_action
+    if await handle_conversational_action(message, message.from_user, user_text):
+        return
     from app.handlers.food_corrections import intercept_chat_food_edit
     if await intercept_chat_food_edit(message, message.from_user, user_text):
         return
@@ -442,6 +452,8 @@ async def _handle_initiative_message(
         await message.answer("Связь сейчас сбоила. Попробуй ответить ещё раз чуть позже.")
         return
 
+    from app.services.companion_actions import guard_unverified_claim
+    result["text"] = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
         notification = await _initiative_notification(session, profile.id, notification_id)
