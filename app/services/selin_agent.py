@@ -37,6 +37,10 @@ from app.config import settings
 log = logging.getLogger('selin.agent')
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class AgentPendingAction(Base):
     __tablename__ = 'selin_agent_pending_actions'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -57,10 +61,6 @@ class AgentActionReceipt(Base):
     message_key: Mapped[str] = mapped_column(String(120))
     action_key: Mapped[str] = mapped_column(String(130))
     result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _aware_utc(value: datetime) -> datetime:
