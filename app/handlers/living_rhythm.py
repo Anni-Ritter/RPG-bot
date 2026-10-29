@@ -237,7 +237,6 @@ async def handle_chat_capture(message: Message, actor, text: str) -> bool:
     return False
 
 
-@router.message(StateFilter(None), F.text)
 async def live_text_message(message: Message, state: FSMContext) -> None:
     text = (message.text or '').strip()
     if not likely_relevant(text):

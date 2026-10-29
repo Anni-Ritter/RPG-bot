@@ -169,7 +169,6 @@ async def cmd_food_edit(message: Message, state: FSMContext) -> None:
     await show_food_list(message, message.from_user)
 
 
-@router.message(StateFilter(None), F.text)
 async def natural_food_edit(message: Message, state: FSMContext) -> None:
     if is_edit_intent(message.text or ''):
         await show_food_list(message, message.from_user, request=message.text or '')

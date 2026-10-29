@@ -10,7 +10,9 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.keyboards import ai_chat_stop_menu, ai_initiative_stop_menu, ai_quest_offer_menu
 from app.models import AIQuestOffer, Notification
-from app.services.ai_engine import ai_enabled, generate_selin_reply
+from app.services.ai_engine import ai_enabled
+from app.services.selin_agent import agent_reply
+from app.handlers.agent_callbacks import send_pending_actions
 from app.services.ai_features import (
     accept_ai_quest,
     append_recent_message,
@@ -190,20 +192,6 @@ async def free_chat_message(
 ) -> None:
     user_text = (user_text_override if user_text_override is not None else (message.text or "")).strip()
     actor = actor_override or message.from_user
-    from app.handlers.companion_actions import handle_conversational_action
-    if await handle_conversational_action(message, actor, user_text):
-        await state.update_data(last_chat_activity_at=now_local().isoformat())
-        return
-    from app.handlers.food_corrections import intercept_chat_food_edit
-    if await intercept_chat_food_edit(message, actor, user_text):
-        await state.update_data(last_chat_activity_at=now_local().isoformat())
-        return
-    # SELIN_LIVING_RHYTHM_20261027_BEGIN
-    from app.handlers.living_rhythm import handle_chat_capture
-    if await handle_chat_capture(message, actor, user_text):
-        await state.update_data(last_chat_activity_at=now_local().isoformat())
-        return
-    # SELIN_LIVING_RHYTHM_20261027_END
     if actor_override is None and _dialog_idle(await state.get_data()):
         await state.clear()
         raise SkipHandler
@@ -241,11 +229,10 @@ async def free_chat_message(
         await session.commit()
 
     try:
-        result = await while_typing(message, generate_selin_reply(
-            user_text=user_text,
-            context=context,
-            recent_chat=recent,
-            can_offer_quest=can_offer,
+        result, agent_turn = await while_typing(message, agent_reply(
+            user_text=user_text, context=context, recent_chat=recent,
+            can_offer_quest=can_offer, profile_id=profile.id,
+            message_key=f'{message.chat.id}:{message.message_id}',
         ))
     except Exception as exc:
         print("AI chat error:", repr(exc))
@@ -253,7 +240,8 @@ async def free_chat_message(
         return
 
     from app.services.companion_actions import guard_unverified_claim
-    result["text"] = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
+    if not agent_turn.completed:
+        result["text"] = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
     offer = None
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, actor.id, actor.full_name)
@@ -277,9 +265,11 @@ async def free_chat_message(
         await session.commit()
 
     from app.services.companion_actions import guard_unverified_claim
-    text = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
+    text = guard_unverified_claim(user_text, str(result.get("text") or "Хм.")) if not agent_turn.completed else str(result.get("text") or "Хм.")
+    if agent_turn.completed:
+        text += "\n\n✅ В базе: " + "\n✅ ".join(agent_turn.completed[:5])
     if saved_memory_count:
-        text += "\n\n🧠 Сохранила деталь в памяти. Настройки не меняла. /selin_status"
+        text += "\n\n🧠 Сохранила деталь в памяти. /selin_status"
     if offer:
         text += (
             f"\n\n📜 Селин предлагает задание: {offer.title}"
@@ -298,6 +288,7 @@ async def free_chat_message(
         text,
         reply_markup=markup,
     )
+    await send_pending_actions(message, agent_turn.pending)
     if result.get("show_tori") and str(result.get("tori_text") or "").strip():
         await send_reaction(
             message,
@@ -401,15 +392,6 @@ async def _handle_initiative_message(
     notification_id: int,
 ) -> None:
     user_text = (message.text or "").strip()
-    from app.handlers.companion_actions import handle_conversational_action
-    if await handle_conversational_action(message, message.from_user, user_text):
-        return
-    from app.handlers.food_corrections import intercept_chat_food_edit
-    if await intercept_chat_food_edit(message, message.from_user, user_text):
-        return
-    from app.handlers.living_rhythm import handle_chat_capture
-    if await handle_chat_capture(message, message.from_user, user_text):
-        return
     if not user_text:
         return
     if user_text in NAVIGATION_TEXTS:
@@ -441,11 +423,10 @@ async def _handle_initiative_message(
         await session.commit()
 
     try:
-        result = await while_typing(message, generate_selin_reply(
-            user_text=user_text,
-            context=context,
-            recent_chat=recent,
-            can_offer_quest=False,
+        result, agent_turn = await while_typing(message, agent_reply(
+            user_text=user_text, context=context, recent_chat=recent,
+            can_offer_quest=False, profile_id=profile.id,
+            message_key=f'{message.chat.id}:{message.message_id}',
         ))
     except Exception as exc:
         print("AI initiative reply error:", repr(exc))
@@ -453,7 +434,8 @@ async def _handle_initiative_message(
         return
 
     from app.services.companion_actions import guard_unverified_claim
-    result["text"] = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
+    if not agent_turn.completed:
+        result["text"] = guard_unverified_claim(user_text, str(result.get("text") or "Хм."))
     async with SessionLocal() as session:
         profile = await get_or_create_profile(session, message.from_user.id, message.from_user.full_name)
         notification = await _initiative_notification(session, profile.id, notification_id)
@@ -477,8 +459,10 @@ async def _handle_initiative_message(
         await session.commit()
 
     text = str(result.get("text") or "Хм.")
+    if agent_turn.completed:
+        text += "\n\n✅ В базе: " + "\n✅ ".join(agent_turn.completed[:5])
     if saved_memory_count:
-        text += "\n\n🧠 Сохранила деталь в памяти. Настройки не меняла. /selin_status"
+        text += "\n\n🧠 Сохранила деталь в памяти. /selin_status"
     markup = None
 
     await send_reaction(
@@ -488,6 +472,7 @@ async def _handle_initiative_message(
         text,
         reply_markup=markup,
     )
+    await send_pending_actions(message, agent_turn.pending)
     if result.get("show_tori") and str(result.get("tori_text") or "").strip():
         await send_reaction(
             message,

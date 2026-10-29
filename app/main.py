@@ -32,7 +32,8 @@ from app.handlers import food_corrections as food_corrections_handlers
 from app.handlers import companion_actions as companion_actions_handlers
 from app.handlers import chat_fallback as chat_fallback_handlers
 from app.services import companion_actions as _companion_actions_model_registry
-from app.handlers.activity_breaks import ActivityBreakMiddleware
+from app.handlers import agent_callbacks as agent_callbacks_handlers
+from app.services import selin_agent as _selin_agent_model_registry
 from app.services import activity_breaks as _activity_break_model_registry
 # SELIN_ACTIVITY_BREAK_20261027_END
 
@@ -44,10 +45,10 @@ async def main() -> None:
         await session.commit()
 
     bot = Bot(settings.bot_token)
-    log.info("SELIN_RELEASE=2026-10-28-conversation-actions-v1; main=%s", __file__)
+    log.info("SELIN_RELEASE=2026-10-29-selin-tools-v1; main=%s", __file__)
     dp = Dispatcher()
     # Run before the active chat FSM routes: even an ordinary message can set a pause.
-    dp.message.outer_middleware(ActivityBreakMiddleware())
+    dp.include_router(agent_callbacks_handlers.router)
     dp.include_router(activity_break_handlers.router)
     # Diary corrections must reach the router before free-chat or quick-input fallbacks.
     dp.include_router(companion_actions_handlers.router)

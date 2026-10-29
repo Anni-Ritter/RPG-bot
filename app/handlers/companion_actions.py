@@ -165,7 +165,6 @@ async def callback_kcal(callback: CallbackQuery) -> None:
         await callback.answer('Не получилось исправить запись',show_alert=True)
 
 
-@router.message(StateFilter(None), F.text)
 async def direct_category(message: Message, state: FSMContext) -> None:
     if not await handle_conversational_action(message, message.from_user, message.text or ''):
         raise SkipHandler

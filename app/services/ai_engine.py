@@ -300,7 +300,7 @@ def _selin_system(context: dict[str, Any], *, can_offer_quest: bool) -> str:
 """.strip()
 
 
-async def _structured_response(*, system: str, user_content: Any, schema_name: str, schema: dict, max_tokens: int = 350) -> dict:
+async def _structured_response(*, system: str, user_content: Any, schema_name: str, schema: dict, max_tokens: int = 350, retry_max_tokens: int | None = None) -> dict:
     client = _client()
     last_error: Exception | None = None
 
@@ -311,7 +311,7 @@ async def _structured_response(*, system: str, user_content: Any, schema_name: s
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_content},
             ],
-            max_output_tokens=max_tokens if attempt == 0 else max(max_tokens * 2, 900),
+            max_output_tokens=max_tokens if attempt == 0 else (retry_max_tokens or max(max_tokens * 2, 900)),
             text={
                 "format": {
                     "type": "json_schema",
