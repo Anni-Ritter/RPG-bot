@@ -15,7 +15,7 @@ from app.db import SessionLocal
 
 router = Router()
 logger = logging.getLogger(__name__)
-RELEASE = '2026-10-29-selin-tools-v1'
+RELEASE = '2026-10-29-living-world-v1'
 
 
 @router.message(Command('version', 'botversion'))
@@ -24,7 +24,9 @@ async def version(message: Message) -> None:
         f'✅ Селин и Тори — {RELEASE}\n'
         'Лавка странствий: обработчик подключён.\n'
         'Разговор без кнопки завершения; /selin_status показывает реальные изменения.\n'
-        'Режим: ИИ-агент с настоящими инструментами. /food_edit — резервное меню.\n'
+        'Режим: ИИ-агент с инструментами; предметы используются и в живых сценах.\n'
+        'Старые повторяющиеся микроивенты заменены ИИ-событиями.\n'
+        '/food_edit — резервное меню.\n'
         'Проверить реальные изменения: /selin_actions.\n'
         'Пауза тренировок: /activity_status.\n'
         'Магазин: /shop; диагностика: /shopcheck.'

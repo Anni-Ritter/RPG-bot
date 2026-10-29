@@ -483,3 +483,18 @@ async def build_ai_context(session, profile):
     context['activity_break_active'] = True
     return context
 # SELIN_ACTIVITY_BREAK_20261027_END
+
+
+# SELIN_LIVING_WORLD_AI_20261029_BEGIN
+_previous_world_context = build_ai_context
+
+async def build_ai_context(session, profile):
+    context = await _previous_world_context(session, profile)
+    from app.services.world_autonomy import world_continuity_context
+    history = await world_continuity_context(session, profile.id)
+    if not history:
+        return context
+    context = dict(context)
+    context['memories'] = (str(context.get('memories') or '') + '\n' + history).strip()
+    return context
+# SELIN_LIVING_WORLD_AI_20261029_END

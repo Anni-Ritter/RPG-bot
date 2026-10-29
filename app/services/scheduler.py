@@ -31,10 +31,19 @@ from app.services.ai_features import (
     get_or_create_ai_state,
     reserve_ai_call,
 )
-from app.services.dialogue import pick_dialogue, pick_tori_autonomous_event
+from app.services.dialogue import pick_dialogue
 from app.services.evening_review import create_evening_review
 from app.services.story import (advance_week1_if_due, get_or_create_story_progress, initialize_week1_v2, selin_chat_gate, story_chapter, story_day)
 
+
+
+# SELIN_LIVING_WORLD_AI_20261029_BEGIN
+from app.services.world_autonomy import (
+    WorldScene, recent_scenes, select_scene_item, select_character,
+    generate_world_scene, apply_world_scene,
+)
+from app.services.wandering_shop import inventory
+# SELIN_LIVING_WORLD_AI_20261029_END
 
 TZ = ZoneInfo(settings.timezone)
 
@@ -142,126 +151,73 @@ async def _get_profile_telegram_id(session, user_id: int) -> int:
     return profile.telegram_id
 
 
-async def _send_tori_autonomous_event(
-    session,
-    notification: Notification,
-    bot: Bot,
-    telegram_id: int,
-    chapter: int,
-) -> None:
-    period = str((notification.payload or {}).get("period") or "day")
-    event = pick_tori_autonomous_event(chapter, period)
-    notification.payload = {
-        "period": period,
-        "event_type": "tori",
-        "event_id": event["id"],
-        "status": "open",
-    }
-    await send_reaction_to_chat(
-        bot,
-        telegram_id,
-        "tori",
-        str(event["emotion"]),
-        str(event["text"]),
-        reply_markup=tori_autonomous_menu(notification.id, event["choices"]),
-    )
+async def _send_world_autonomous_event(
+    session, notification: Notification, bot: Bot, telegram_id: int,
+    profile: UserProfile, now: datetime, chapter: int,
+) -> bool | None:
+    """True=delivered; False=skipped; None=retry saved scene after network error.
 
+    The world event and item use are committed BEFORE the Telegram message. If
+    delivery fails, next worker tick resends exactly that scene, not a new one.
+    """
+    from app.services.world_autonomy import WorldScene
+    from sqlalchemy import select
 
-async def _send_static_selin_event(
-    notification: Notification,
-    bot: Bot,
-    telegram_id: int,
-) -> None:
-    period = str((notification.payload or {}).get("period") or "day")
-    text = (
-        "— Я просто проверяю, что связь ещё работает. Не обязательно каждый раз ждать, пока появится новая проблема."
-        if period == "day"
-        else "— День почти закончился. Я здесь. На случай, если ты вдруг решила проверить."
-    )
-    notification.payload = {
-        "period": period,
-        "event_type": "selin_static",
-        "status": "closed",
-    }
-    await send_reaction_to_chat(bot, telegram_id, "selin", "neutral", text)
+    existing = await session.scalar(select(WorldScene).where(
+        WorldScene.notification_id == notification.id))
+    if existing is not None:
+        try:
+            await send_reaction_to_chat(bot, telegram_id, existing.character,
+                                        existing.emotion, existing.text)
+            return True
+        except Exception:
+            import logging
+            logging.getLogger('selin.world').exception('World scene delivery failed, retrying same scene')
+            return None
 
-
-async def _send_selin_autonomous_event(
-    session,
-    notification: Notification,
-    bot: Bot,
-    telegram_id: int,
-    profile: UserProfile,
-    now: datetime,
-) -> bool:
+    if not ai_enabled():
+        return False
     progress = await get_or_create_story_progress(session, profile.id, now.date())
     initialize_week1_v2(progress, profile, now.date())
     advance_week1_if_due(progress, now.date())
     allowed, _ = selin_chat_gate(profile, progress, now.date())
-    if not allowed or not ai_enabled() or not await reserve_ai_call(session, profile.id, "initiative"):
+    if not allowed or not await reserve_ai_call(session, profile.id, 'initiative'):
         return False
-
     try:
         context = await build_ai_context(session, profile)
-        can_offer = await can_offer_ai_quest(session, profile.id, now.date())
-        # Release the SQLite write transaction before the network call.
+        history = await recent_scenes(session, profile.id)
+        objects = await inventory(session, profile.id, limit=50)
+        item = select_scene_item(objects, history)
+        character = select_character(chapter, item)
+        period = str((notification.payload or {}).get('period') or 'day')
         await session.commit()
-        result = await generate_selin_initiative(context=context, can_offer_quest=can_offer)
-
-        offer = None
-        if result.get("offer_quest") and can_offer:
-            title = str(result.get("quest_title") or "").strip()
-            if title:
-                offer = await create_ai_quest_offer(
-                    session,
-                    profile,
-                    title=title,
-                    difficulty=str(result.get("quest_difficulty") or "easy"),
-                    reason=str(result.get("quest_reason") or ""),
-                )
-
-        text = str(result.get("text") or "Ты сегодня совсем пропала.")
-        if offer:
-            text += (
-                f"\n\n📜 Задание: {offer.title}"
-                f"\nНаграда: +{offer.reward_xp} XP · +{offer.reward_coins} монет"
-            )
-            if offer.reason:
-                text += f"\n{offer.reason}"
-
-        period = str((notification.payload or {}).get("period") or "day")
-        notification.payload = {
-            "period": period,
-            "event_type": "selin",
-            "status": "open",
-            "initiative_text": text,
-        }
-        ai_state = await get_or_create_ai_state(session, profile)
-        append_recent_message(ai_state, "assistant", text)
-        ai_state.last_initiative_on = now.date()
-
-        await send_reaction_to_chat(
-            bot,
-            telegram_id,
-            "selin",
-            str(result.get("emotion") or "neutral"),
-            text,
-            reply_markup=ai_initiative_menu(notification.id, offer.id if offer else None),
-        )
-        if result.get("show_tori") and str(result.get("tori_text") or "").strip():
-            try:
-                await send_reaction_to_chat(
-                    bot,
-                    telegram_id,
-                    "tori",
-                    str(result.get("tori_emotion") or "neutral"),
-                    str(result.get("tori_text")),
-                )
-            except Exception as exc:
-                print("AI initiative Tori reaction error:", repr(exc))
-        return True
-    except Exception as exc:
-        print("AI initiative error:", repr(exc))
+        scene = await generate_world_scene(context=context, period=period,
+                                           actor=character, item=item, history=history)
+        from difflib import SequenceMatcher
+        if any(SequenceMatcher(None, scene['text'].casefold(), old.text.casefold()).ratio() > 0.79
+               for old in history[:7]):
+            return False
+        await apply_world_scene(session, profile, notification, scene, item)
+        notification.payload = {**dict(notification.payload or {}),
+                                'event_type': 'world_ai', 'status': 'closed',
+                                'character': scene['character'],
+                                'item_id': item.id if item and scene['uses_item'] else None}
+        state = await get_or_create_ai_state(session, profile)
+        append_recent_message(state, 'assistant', scene['text'])
+        state.last_initiative_on = now.date()
+        await session.commit()
+        # No claiming to use an item until the actual change is persisted.
+        try:
+            await send_reaction_to_chat(bot, telegram_id, scene['character'],
+                                        scene['emotion'], scene['text'])
+            return True
+        except Exception:
+            import logging
+            logging.getLogger('selin.world').exception('World scene delivery failed; retry pending')
+            return None
+    except Exception:
+        import logging
+        logging.getLogger('selin.world').exception('AI world scene failed; no canned fallback')
         await session.rollback()
         await session.refresh(notification)
         return False
@@ -290,21 +246,13 @@ async def send_due(bot: Bot) -> None:
 
             if n.kind == "autonomous_event":
                 profile = await session.get(UserProfile, n.user_id)
-                sent_selin = False
-                if profile and random.random() < 0.65:
-                    sent_selin = await _send_selin_autonomous_event(
-                        session,
-                        n,
-                        bot,
-                        telegram_id,
-                        profile,
-                        now,
+                if profile:
+                    delivered = await _send_world_autonomous_event(
+                        session, n, bot, telegram_id, profile, now, chapter,
                     )
-                if not sent_selin:
-                    if current_story_day >= 2:
-                        await _send_tori_autonomous_event(session, n, bot, telegram_id, chapter)
-                    else:
-                        await _send_static_selin_event(n, bot, telegram_id)
+                    if delivered is None:
+                        # DB already stores the scene; retry Telegram delivery next tick.
+                        continue
 
             elif n.kind == "activity_nudge":
                 replacement = await session.scalar(
@@ -374,7 +322,8 @@ async def send_due(bot: Bot) -> None:
                         except Exception as exc:
                             print("AI initiative error:", repr(exc))
                 if not sent_ai:
-                    await send_reaction_to_chat(bot, telegram_id, "tori", "at_door", pick_dialogue("activity_nudge", chapter))
+                    # No repetitive canned fallback. This is an optional initiative.
+                    pass
 
             elif n.kind == "daily_challenge_offer":
                 await send_reaction_to_chat(

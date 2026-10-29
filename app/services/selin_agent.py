@@ -105,7 +105,7 @@ TOOLS = [
     _function('refresh_shop', 'Открыть/обновить лавку; если обновление стоит монет, спросит подтверждение.', {}),
     _function('get_inventory', 'Посмотреть настоящие купленные вещи, ID, получателей и использования.', {}),
     _function('buy_item', 'Предложить покупку найденного товара за монеты; обязательно спросит подтверждение.', {'offer_id':I('ID товара из get_shop')}),
-    _function('use_item', 'Использовать конкретную уже купленную вещь в сцене, запомнить использование.', {'item_id':I('ID из get_inventory')}),
+    _function('use_item', 'Реально разыграть использование купленной вещи; сохранить применение и реакцию персонажа для следующих сцен.', {'item_id':I('ID из get_inventory')}),
     _function('set_initiative', 'Изменить частоту инициативных сообщений Селин по прямой просьбе пользователя.', {'mode':{'type':'string','enum':['calm','normal','caring']}}),
 ]
 
@@ -442,7 +442,7 @@ class AgentTurn:
                 rows=await inventory(session,self.user_id,limit=25)
                 self.seen_items.update(x.id for x in rows)
                 return {'status':'success','items':[{'id':x.id,'name':x.name,'recipient':x.recipient,'status':x.status,
-                      'uses':x.uses,'use_hint':x.use_hint} for x in rows]}
+                      'uses':x.uses,'use_hint':x.use_hint,'last_scene':(x.last_reaction or '')[:350]} for x in rows]}
             if name == 'buy_item':
                 rid=int(a['offer_id'])
                 if rid not in self.seen_offers: raise ValueError('Сначала посмотри ассортимент через get_shop.')
@@ -469,9 +469,25 @@ class AgentTurn:
                 session.add(AgentActionReceipt(user_id=self.user_id,message_key=self.message_key,
                                                action_key=action_key,result={'item_id':rid}))
                 await session.commit()
-                text=f'Использовала «{item.name}»; это сохранено для будущих сцен.'
+                # The use has already committed, so AI/network errors cannot roll it back.
+                # Generate a fresh reaction and retain it in the world inventory memory.
+                story = ''
+                try:
+                    from app.services.wandering_shop_ai import make_reaction
+                    from app.services.wandering_shop import save_reaction
+                    from app.services.ai_engine import ai_enabled
+                    if ai_enabled():
+                        story = await make_reaction(item, 'use')
+                        async with SessionLocal() as event_session:
+                            await save_reaction(event_session, self.user_id, item.id, story,
+                                                event_type='agent_use_scene')
+                            await event_session.commit()
+                except Exception:
+                    log.exception('Item use was committed, but its narrative reaction failed')
+                text=f'«{item.name}» использован, событие сохранено.'
                 self.completed.append(text)
-                return {'status':'success','message':text,'hint':item.use_hint}
+                return {'status':'success','message':text, 'scene':story,
+                        'hint':item.use_hint}
             if name == 'set_initiative':
                 mode=a['mode']
                 if mode not in {'calm','normal','caring'}: raise ValueError('Неизвестный режим.')
